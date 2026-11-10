@@ -53,6 +53,8 @@ services:
       redpanda:
         condition: service_healthy
 
+  # Exactly one relay instance (blueprint decision D1). Two relays could
+  # each claim a batch and publish one account's events out of order.
   relay:
     build: .
     command: python -m app.messaging.relay
@@ -66,29 +68,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  consumer:
-    build: .
-    command: python -m app.messaging.consumer
-    environment:
-      DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
-      KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redpanda:
-        condition: service_healthy
-    restart: unless-stopped
-
-  retry-consumer:
-    build: .
-    command: python -m app.messaging.retry
-    environment:
-      DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
-      KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
-    depends_on:
-      redpanda:
-        condition: service_healthy
-    restart: unless-stopped
+  # The main consumer arrives in Phase 5 and the retry tiers in Phase 6.
+  # Their services are added by those phases, once the modules exist.
 
   prometheus:
     image: prom/prometheus:v2.54.1

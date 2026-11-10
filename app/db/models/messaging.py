@@ -1,12 +1,14 @@
 """Idempotency keys, outbox, processed events, DLQ and reconciliation.
 
-These are the correctness tables. None of them hold money; all of them
-exist to make sure money moves exactly once.
+These are the correctness tables. Apart from the payment_events projection,
+none of them hold money; all of them exist to make sure money moves
+exactly once.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import decimal
 
 from sqlalchemy import (
     BigInteger,
@@ -24,6 +26,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.models.base import Base
+from app.db.models.ledger import MONEY
 
 
 class IdempotencyKey(Base):
@@ -127,7 +130,10 @@ class PaymentEventProjection(Base):
     transaction_id: Mapped[str] = mapped_column(Text, nullable=False)
     from_account_id: Mapped[str] = mapped_column(Text, nullable=False)
     to_account_id: Mapped[str] = mapped_column(Text, nullable=False)
-    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # NUMERIC(20,4), the same representation as postings.amount (migration
+    # 0002). The consumer converts the event's amount_minor with
+    # app.core.money.to_decimal, the only converter.
+    amount: Mapped[decimal.Decimal] = mapped_column(MONEY, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     applied_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

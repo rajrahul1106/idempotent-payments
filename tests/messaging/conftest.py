@@ -117,14 +117,13 @@ def producer() -> RecordingProducer:
 
 
 @pytest.fixture
-def clear_outbox(db_available):
+def clear_outbox(database):
     """Empty the outbox so a test's counts are its own.
 
     The relay claims every unpublished row regardless of who wrote it, so
-    a test asserting "50 rows recovered" needs to start from zero.
+    a test asserting "50 rows recovered" needs to start from zero. This
+    only ever runs against the _test database (see tests/conftest.py).
     """
-    if not db_available:
-        pytest.skip("PostgreSQL not reachable")
     from sqlalchemy import text
 
     from app.db.session import unit_of_work

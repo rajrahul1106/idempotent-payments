@@ -7,8 +7,8 @@ import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import Principal, db_session, require_role
-from app.api.errors import AccountNotFound
+from app.api.deps import Principal, db_session, require_account_access, require_role
+from app.core.exceptions import AccountNotFound
 from app.core.money import format_amount, to_minor
 from app.db.repositories import accounts as repo
 from app.db.session import unit_of_work
@@ -52,7 +52,7 @@ def create_account(
 @router.get("/accounts/{account_id}", response_model=AccountOut)
 def get_account(
     account_id: str,
-    _: Principal = Depends(require_role("viewer")),
+    _: Principal = Depends(require_account_access),
     session: Session = Depends(db_session),
 ) -> AccountOut:
     account = repo.get(session, account_id)
@@ -66,7 +66,7 @@ def list_postings(
     account_id: str,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    _: Principal = Depends(require_role("viewer")),
+    _: Principal = Depends(require_account_access),
     session: Session = Depends(db_session),
 ) -> list[PostingOut]:
     account = repo.get(session, account_id)

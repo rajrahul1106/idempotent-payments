@@ -53,7 +53,7 @@ def _transaction_count(from_account: str) -> int:
 
 
 def test_ten_concurrent_identical_requests_produce_one_transaction(
-    client, client_token, make_account, ledger_total
+    client, owner_token, make_account, ledger_total
 ):
     """The headline gate: a client retrying 10 times pays once."""
     source = make_account(opening_minor=1_000_000)
@@ -70,7 +70,7 @@ def test_ten_concurrent_identical_requests_produce_one_transaction(
 
     def send(_: int):
         return client.post(
-            "/v1/payments", json=body, headers=_headers(client_token, key)
+            "/v1/payments", json=body, headers=_headers(owner_token(source), key)
         )
 
     with ThreadPoolExecutor(max_workers=10) as pool:
@@ -93,7 +93,7 @@ def test_ten_concurrent_identical_requests_produce_one_transaction(
 
 
 def test_concurrent_withdrawals_cannot_overdraw(
-    client, client_token, make_account, ledger_total
+    client, owner_token, make_account, ledger_total
 ):
     """Two withdrawals of 800 from a balance of 1000: exactly one succeeds."""
     source = make_account(opening_minor=100_000)  # 1000.00
@@ -108,7 +108,7 @@ def test_concurrent_withdrawals_cannot_overdraw(
                 "amount_minor": 80_000,  # 800.00
                 "currency": "INR",
             },
-            headers=_headers(client_token, str(uuid.uuid4())),
+            headers=_headers(owner_token(source), str(uuid.uuid4())),
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -128,7 +128,7 @@ def test_concurrent_withdrawals_cannot_overdraw(
 
 @pytest.mark.parametrize("iteration", range(10))
 def test_overdraw_race_is_not_flaky(
-    client, client_token, make_account, iteration
+    client, owner_token, make_account, iteration
 ):
     """Repeat the race: a lock bug shows up as an occasional pass, not a
     consistent one, so one run proves nothing."""
@@ -144,7 +144,7 @@ def test_overdraw_race_is_not_flaky(
                 "amount_minor": 80_000,
                 "currency": "INR",
             },
-            headers=_headers(client_token, str(uuid.uuid4())),
+            headers=_headers(owner_token(source), str(uuid.uuid4())),
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -155,7 +155,7 @@ def test_overdraw_race_is_not_flaky(
 
 
 def test_bidirectional_transfers_do_not_deadlock(
-    client, client_token, make_account, ledger_total
+    client, owner_token, make_account, ledger_total
 ):
     """A->B and B->A at the same time. Ordered locking prevents deadlock."""
     a = make_account(opening_minor=500_000)
@@ -171,7 +171,7 @@ def test_bidirectional_transfers_do_not_deadlock(
                 "amount_minor": 10_000,
                 "currency": "INR",
             },
-            headers=_headers(client_token, str(uuid.uuid4())),
+            headers=_headers(owner_token(src), str(uuid.uuid4())),
         )
 
     pairs = [(a, b), (b, a)] * 25  # 50 transfers, half in each direction
@@ -189,7 +189,7 @@ def test_bidirectional_transfers_do_not_deadlock(
 
 
 def test_many_operations_on_one_account_match_arithmetic(
-    client, client_token, make_account, ledger_total
+    client, owner_token, make_account, ledger_total
 ):
     """Per-account correctness under 10 concurrent clients."""
     source = make_account(opening_minor=10_000_000)  # 100,000.00
@@ -206,7 +206,7 @@ def test_many_operations_on_one_account_match_arithmetic(
                 "amount_minor": amount_minor,
                 "currency": "INR",
             },
-            headers=_headers(client_token, str(uuid.uuid4())),
+            headers=_headers(owner_token(source), str(uuid.uuid4())),
         )
 
     with ThreadPoolExecutor(max_workers=10) as pool:

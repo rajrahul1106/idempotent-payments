@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Header, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from app.api.deps import Principal, db_session, rate_limit, require_role
-from app.api.errors import DomainError
+from app.api.deps import (
+    READ_ALL_ROLES,
+    Principal,
+    db_session,
+    rate_limit,
+    require_role,
+)
+from app.core.exceptions import DomainError
 from app.db.models.ledger import Transaction
 from app.schemas.payments import PaymentRequest
-from app.services.payment import PaymentCommand, create_payment
+from app.services.payment import Actor, PaymentCommand, create_payment
 
 router = APIRouter(tags=["payments"])
 
@@ -29,7 +35,7 @@ def create(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     traceparent: str | None = Header(default=None),
     _: None = Depends(rate_limit),
-    __: Principal = Depends(require_role("client")),
+    principal: Principal = Depends(require_role("client")),
 ) -> JSONResponse:
     # A missing key is rejected rather than processed unprotected. Letting
     # it through would make retry safety optional, which is the whole point.
@@ -49,6 +55,7 @@ def create(
         reference=body.reference,
         metadata=body.metadata,
         traceparent=traceparent,
+        actor=Actor(role=principal.role, account_id=principal.account_id),
     )
 
     result = create_payment(command)
@@ -62,10 +69,12 @@ def create(
 @router.get("/payments/{payment_id}")
 def get_payment(
     payment_id: str,
-    _: Principal = Depends(require_role("viewer")),
+    # D4: viewer and operator read any payment; a client reads only the
+    # payments it pays or receives, checked against the postings below.
+    principal: Principal = Depends(require_role("viewer")),
     session: Session = Depends(db_session),
 ) -> JSONResponse:
-    from app.api.errors import DomainError as _DomainError
+    from app.core.exceptions import DomainError as _DomainError
 
     transaction = session.get(Transaction, payment_id)
     if transaction is None:
@@ -74,6 +83,13 @@ def get_payment(
             code = "payment_not_found"
 
         raise _NotFound(f"Payment {payment_id} not found")
+
+    parties = {posting.account_id for posting in transaction.postings}
+    if principal.role not in READ_ALL_ROLES and principal.account_id not in parties:
+        raise HTTPException(
+            status_code=403,
+            detail="Clients may read only payments they pay or receive",
+        )
 
     return JSONResponse(
         status_code=200,

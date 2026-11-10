@@ -12,57 +12,34 @@ import uuid
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+# Domain exceptions live in app.core so services never import the web
+# framework. This module only maps them onto the error body.
+from app.core.exceptions import DomainError
 
 logger = logging.getLogger(__name__)
 
-
-class DomainError(Exception):
-    """Base for errors that map onto a specific HTTP status and error code."""
-
-    status_code: int = 400
-    code: str = "invalid_request"
-
-    def __init__(self, message: str, *, code: str | None = None) -> None:
-        super().__init__(message)
-        self.message = message
-        if code:
-            self.code = code
+# SQLSTATEs that mean the database is not there, as opposed to the database
+# refusing a statement. Class 08 is connection exceptions; 57P01 to 57P03
+# are admin shutdown, crash shutdown and "cannot connect now" (starting up).
+_UNAVAILABLE_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
 
 
-class AccountNotFound(DomainError):
-    status_code = 404
-    code = "account_not_found"
+def database_unavailable(exc: OperationalError) -> bool:
+    """True when the error means Postgres cannot be reached (blueprint §8: 503).
 
-
-class AccountNotActive(DomainError):
-    status_code = 422
-    code = "account_not_active"
-
-
-class CurrencyMismatch(DomainError):
-    status_code = 422
-    code = "currency_mismatch"
-
-
-class InsufficientFunds(DomainError):
-    status_code = 422
-    code = "insufficient_funds"
-
-
-class IdempotencyKeyReuse(DomainError):
-    status_code = 422
-    code = "idempotency_key_reuse"
-
-
-class RequestInProgress(DomainError):
-    status_code = 409
-    code = "request_in_progress"
-
-
-class SameAccountTransfer(DomainError):
-    status_code = 422
-    code = "same_account_transfer"
+    A lock or statement timeout is also an OperationalError, but the database
+    answered, so it stays a 500.
+    """
+    if exc.connection_invalidated:
+        return True
+    sqlstate = getattr(exc.orig, "sqlstate", None)
+    if sqlstate is None:
+        # Raised by the driver itself: refused, reset or timed out connecting.
+        return True
+    return sqlstate.startswith("08") or sqlstate in _UNAVAILABLE_SQLSTATES
 
 
 def _current_trace_id() -> str:
@@ -122,6 +99,31 @@ def register_error_handlers(app: FastAPI) -> None:
                 request,
             ),
             headers=getattr(exc, "headers", None),
+        )
+
+    @app.exception_handler(OperationalError)
+    async def _database(request: Request, exc: OperationalError) -> JSONResponse:
+        if database_unavailable(exc):
+            logger.error(
+                "database unavailable on %s %s: %s",
+                request.method,
+                request.url.path,
+                exc.orig,
+            )
+            return JSONResponse(
+                status_code=503,
+                content=_body(
+                    "service_unavailable",
+                    "The database is unavailable; retry later",
+                    request,
+                ),
+            )
+        logger.exception(
+            "unhandled database error on %s %s", request.method, request.url.path
+        )
+        return JSONResponse(
+            status_code=500,
+            content=_body("internal_error", "An unexpected error occurred", request),
         )
 
     @app.exception_handler(Exception)

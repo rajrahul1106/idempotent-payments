@@ -1,4 +1,11 @@
-.PHONY: help up down logs migrate downgrade seed test test-unit test-integration test-messaging load chaos fmt check
+.PHONY: help up down logs migrate downgrade seed test test-fast test-unit test-integration test-messaging load chaos fmt check
+
+# The test suite never reads DATABASE_URL. It points the app at
+# TEST_DATABASE_URL and refuses any database whose name does not end in
+# _test, so no test can touch the database `make up` serves. The default is
+# a separate database on the same server; the suite creates it if missing.
+TEST_DATABASE_URL ?= postgresql+psycopg://payments:payments@localhost:5432/payments_test
+export TEST_DATABASE_URL
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -13,7 +20,7 @@ down:  ## Stop the stack and drop volumes
 	docker compose down -v
 
 logs:  ## Tail logs for app services
-	docker compose logs -f api relay consumer
+	docker compose logs -f api relay
 
 migrate:  ## Apply all migrations
 	alembic upgrade head
@@ -24,14 +31,16 @@ downgrade:  ## Roll back one migration
 seed:  ## Create system and demo accounts
 	PYTHONPATH=. python scripts/seed.py
 
-test:  ## Full suite
+test:  ## Full suite. Needs PostgreSQL; fails, never skips, without it
 	pytest
 
-test-unit:  ## No infrastructure needed
+test-fast:  ## Unit tests only, no infrastructure
 	pytest tests/unit -m "not integration and not messaging and not chaos"
 
+test-unit: test-fast  ## Same as test-fast
+
 test-integration:  ## Needs PostgreSQL
-	pytest tests/integration tests/api tests/concurrency -m "not messaging and not chaos"
+	pytest tests/integration tests/api tests/concurrency tests/messaging -m "not messaging and not chaos"
 
 test-messaging:  ## Needs Kafka
 	pytest tests/messaging -m messaging

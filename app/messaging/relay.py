@@ -20,9 +20,15 @@ crash after the broker acknowledged but before the commit republishes
 those events, which is the duplicate the consumer is built to absorb.
 
 Publishing stops at the first failure rather than skipping past it. Rows
-are claimed in id order, which is commit order, so continuing past a
-failed row would publish a later event for the same account before an
-earlier one and break per-account ordering.
+are claimed in id order, which for any one account is commit order (see
+outbox.claim_batch), so continuing past a failed row would publish a later
+event for the same account before an earlier one and break per-account
+ordering.
+
+Exactly one relay instance runs (blueprint decision D1). The relay holds
+the claimed outbox rows' locks while it publishes. Those locks never block
+a payment, which only inserts new outbox rows, and each publish is bounded
+by the producer's 10-second flush.
 """
 
 from __future__ import annotations

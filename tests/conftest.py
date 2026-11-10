@@ -2,19 +2,137 @@
 
 There are no mocked databases or brokers here. A mocked broker cannot
 redeliver a message, and redelivery is the behaviour under test.
+
+The suite never touches the database `make up` serves. It reads
+TEST_DATABASE_URL, refuses any database whose name does not end in
+`_test`, and points the application at it before any app module loads.
+Tests marked integration or messaging FAIL, never skip, when that database
+is missing or unreachable: a green run has to mean the gates ran.
 """
 
 from __future__ import annotations
 
 import os
+import pathlib
+import subprocess
+import sys
 import uuid
 from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 os.environ.setdefault("ENVIRONMENT", "ci")
+
+# app.core.config reads DATABASE_URL once, at import, so it is set here,
+# before any test module imports the app. When there is no usable test
+# database it points somewhere unreachable, so nothing can fall back to a
+# DATABASE_URL from the shell or from .env.
+_UNREACHABLE = "postgresql+psycopg://no-test-database@127.0.0.1:1/unset_test"
+_TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "").strip()
+_REFUSAL: str | None = None  # the whole run refuses to start
+_DB_PROBLEM: str | None = None  # tests that need the database fail
+
+if not _TEST_DATABASE_URL:
+    _DB_PROBLEM = "TEST_DATABASE_URL is not set, so the database tests cannot run"
+else:
+    try:
+        _name = make_url(_TEST_DATABASE_URL).database or ""
+    except ArgumentError:
+        _name = ""
+        _REFUSAL = "TEST_DATABASE_URL is not a valid database URL"
+    if _REFUSAL is None and not _name.endswith("_test"):
+        _REFUSAL = (
+            f"TEST_DATABASE_URL names database {_name!r}. The suite only runs "
+            "against a database whose name ends in _test, so it can never "
+            "touch the one `make up` serves."
+        )
+
+os.environ["DATABASE_URL"] = (
+    _UNREACHABLE if (_REFUSAL or _DB_PROBLEM) else _TEST_DATABASE_URL
+)
+
+
+def pytest_configure(config):
+    if _REFUSAL:
+        raise pytest.UsageError(_REFUSAL)
+
+
+def _ensure_test_database_exists() -> None:
+    """Create the test database on first use. Its name always ends in _test."""
+    target = make_url(_TEST_DATABASE_URL)
+    admin = create_engine(
+        target.set(database="postgres"),
+        isolation_level="AUTOCOMMIT",
+        connect_args={"connect_timeout": 5},
+    )
+    try:
+        with admin.connect() as conn:
+            exists = conn.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": target.database},
+            ).first()
+            if exists is None:
+                conn.execute(text(f'CREATE DATABASE "{target.database}"'))
+    finally:
+        admin.dispose()
+
+
+def _migrate_test_database_to_head() -> None:
+    # A subprocess, because alembic's env.py reconfigures logging and that
+    # would change what caplog sees in this process.
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        pytest.fail(
+            f"alembic upgrade head failed on the test database:\n{result.stderr}",
+            pytrace=False,
+        )
+
+
+@pytest.fixture(scope="session")
+def database() -> str:
+    """The test database: reachable, migrated to head and seeded.
+
+    Fails rather than skips, so a run in which the gates did not execute
+    can never be green.
+    """
+    if _DB_PROBLEM:
+        pytest.fail(_DB_PROBLEM, pytrace=False)
+    shown = make_url(_TEST_DATABASE_URL).render_as_string(hide_password=True)
+    try:
+        _ensure_test_database_exists()
+    except Exception as exc:  # unreachable server, bad credentials, ...
+        pytest.fail(f"test database {shown} is not reachable: {exc}", pytrace=False)
+
+    from app.db.session import ping
+
+    if not ping():
+        pytest.fail(f"test database {shown} is not reachable", pytrace=False)
+    _migrate_test_database_to_head()
+
+    from scripts.seed import seed
+
+    seed()
+    return _TEST_DATABASE_URL
+
+
+@pytest.fixture(autouse=True)
+def _require_db(request):
+    """Database tests fail, never skip, when the test database is unusable."""
+    node = request.node
+    if node.get_closest_marker("integration") or node.get_closest_marker("messaging"):
+        request.getfixturevalue("database")
 
 
 @pytest.fixture(scope="session")
@@ -25,26 +143,7 @@ def client() -> TestClient:
 
 
 @pytest.fixture(scope="session")
-def db_available() -> bool:
-    from app.db.session import ping
-
-    return ping()
-
-
-@pytest.fixture(autouse=True)
-def _require_db(request, db_available):
-    """Skip integration-marked tests when no database is reachable."""
-    if request.node.get_closest_marker("integration") and not db_available:
-        pytest.skip("PostgreSQL not reachable")
-
-
-@pytest.fixture(scope="session")
-def seeded(db_available):
-    if not db_available:
-        pytest.skip("PostgreSQL not reachable")
-    from scripts.seed import seed
-
-    seed()
+def seeded(database):
     return True
 
 
@@ -81,6 +180,22 @@ def viewer_token(client, seeded) -> str:
 @pytest.fixture
 def auth(operator_token):
     return {"Authorization": f"Bearer {operator_token}"}
+
+
+@pytest.fixture
+def owner_token():
+    """A client token that owns the given account (blueprint decision D4).
+
+    Signed with the same secret the API verifies, so it is a real token; it
+    just skips the seeded-user lookup, which test_accounts.py covers.
+    """
+    from app.core.security import issue_token
+
+    def _token(account_id: str) -> str:
+        token, _ = issue_token(f"owner-{account_id}", "client", account_id=account_id)
+        return token
+
+    return _token
 
 
 @pytest.fixture

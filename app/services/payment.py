@@ -12,17 +12,18 @@ import datetime as dt
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
-from app.api.errors import (
+from app.core.exceptions import (
     AccountNotActive,
     AccountNotFound,
     CurrencyMismatch,
+    Forbidden,
     IdempotencyKeyReuse,
     InsufficientFunds,
     RequestInProgress,
@@ -45,6 +46,37 @@ SCHEMA_VERSION = 1
 _RACE_POLL_ATTEMPTS = 20
 _RACE_POLL_INTERVAL_S = 0.05
 
+# The SQLSTATEs the write path tells apart. Anything else is a 500.
+UNIQUE_VIOLATION = "23505"
+CHECK_VIOLATION = "23514"
+LOCK_NOT_AVAILABLE = "55P03"
+IDEMPOTENCY_KEY_CONSTRAINT = "idempotency_keys_pkey"
+
+
+def _sqlstate(exc: DBAPIError) -> str | None:
+    return getattr(exc.orig, "sqlstate", None)
+
+
+def _is_idempotency_key_conflict(exc: IntegrityError) -> bool:
+    """True only for a duplicate on the idempotency key itself."""
+    diag = getattr(exc.orig, "diag", None)
+    return (
+        _sqlstate(exc) == UNIQUE_VIOLATION
+        and getattr(diag, "constraint_name", None) == IDEMPOTENCY_KEY_CONSTRAINT
+    )
+
+
+@dataclass(frozen=True)
+class Actor:
+    """Who is asking, taken from the verified token.
+
+    Blueprint decision D4: a client debits only the account its token names,
+    and only an operator debits a system account.
+    """
+
+    role: str
+    account_id: str | None = None
+
 
 @dataclass(frozen=True)
 class PaymentCommand:
@@ -56,6 +88,8 @@ class PaymentCommand:
     reference: str | None = None
     metadata: dict[str, Any] | None = None
     traceparent: str | None = None
+    # Required and keyword-only, so no caller can forget to say who it is.
+    actor: Actor = field(kw_only=True)
 
     def body_for_fingerprint(self) -> dict[str, Any]:
         """Exactly the fields a client sent. The key is not part of its own
@@ -77,15 +111,50 @@ class PaymentResult:
     replayed: bool
 
 
+def _authorize_source(command: PaymentCommand) -> None:
+    """D4, first half: an operator debits any account, a client only its own.
+
+    Runs before the idempotency lookup, so a caller who does not own the
+    source account cannot replay someone else's stored response either.
+    The system-account half needs the account row and runs under the lock.
+    """
+    actor = command.actor
+    if actor.role == "operator":
+        return
+    if (
+        actor.role == "client"
+        and actor.account_id is not None
+        and actor.account_id == command.from_account_id
+    ):
+        return
+    raise Forbidden(
+        f"Role '{actor.role}' may not debit account {command.from_account_id}"
+    )
+
+
 def create_payment(command: PaymentCommand) -> PaymentResult:
     """Apply a payment at most once for the given idempotency key."""
+    _authorize_source(command)
     body_fingerprint = idempotency.fingerprint(command.body_for_fingerprint())
 
     try:
         return _attempt(command, body_fingerprint)
-    except IntegrityError:
-        # Another request with the same key won the INSERT. Wait briefly for
-        # it to commit, then serve its stored response.
+    except IntegrityError as exc:
+        if not _is_idempotency_key_conflict(exc):
+            if _sqlstate(exc) == CHECK_VIOLATION:
+                # The database refused a write that breaks a ledger rule,
+                # most likely the deferred balance trigger at COMMIT. That is
+                # a correctness break, not a race, so it surfaces as a 500.
+                logger.error(
+                    "database rejected payment for idempotency key %s "
+                    "(SQLSTATE %s): %s",
+                    command.idempotency_key,
+                    CHECK_VIOLATION,
+                    exc.orig,
+                )
+            raise
+        # Another request with the same key won the INSERT and has committed.
+        # Serve its stored response.
         logger.info(
             "idempotency race on key %s, waiting for the winner",
             command.idempotency_key,
@@ -120,9 +189,19 @@ def _attempt(command: PaymentCommand, body_fingerprint: str) -> PaymentResult:
 
         record = lookup.record
         if record is None:
-            record = idempotency.reserve(
-                session, command.idempotency_key, body_fingerprint
-            )
+            try:
+                record = idempotency.reserve(
+                    session, command.idempotency_key, body_fingerprint
+                )
+            except OperationalError as exc:
+                if _sqlstate(exc) != LOCK_NOT_AVAILABLE:
+                    raise
+                # Decision D2: a duplicate waits on the first request's key.
+                # If that request is still running when lock_timeout expires,
+                # it is in flight, which is exactly what 409 means.
+                raise RequestInProgress(
+                    "A request with this idempotency key is still being processed"
+                ) from exc
         else:
             # Previous attempt failed; this key is free to use again.
             record.state = "in_progress"
@@ -154,6 +233,11 @@ def _post_payment(
         raise AccountNotFound(f"Account {command.from_account_id} not found")
     if destination is None:
         raise AccountNotFound(f"Account {command.to_account_id} not found")
+
+    # D4, second half: system accounts skip the balance check below, so
+    # debiting one creates money. Only an operator may do it.
+    if source.account_type == "system" and command.actor.role != "operator":
+        raise Forbidden(f"Only an operator may debit system account {source.id}")
 
     for account in (source, destination):
         if account.status != "active":

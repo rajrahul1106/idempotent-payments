@@ -2,10 +2,13 @@
 
 Repositories never commit. The relay owns the transaction.
 
-The claim query is the interesting part. `FOR UPDATE SKIP LOCKED` lets
-several relay instances run at once: each one locks the rows it takes and
-the others step over them rather than blocking. Without SKIP LOCKED a
-second relay would serialise behind the first and add nothing.
+The claim query is the interesting part. It takes `FOR UPDATE SKIP LOCKED`,
+and exactly one relay instance runs (blueprint decision D1). A second
+relay would claim the next batch and could publish an account's later
+event before the first relay publishes its earlier one, which breaks
+per-account ordering. SKIP LOCKED stays because it is harmless with one
+relay: a restarting relay steps over rows its predecessor still holds
+instead of blocking behind them.
 """
 
 from __future__ import annotations
@@ -21,9 +24,12 @@ from app.db.models.messaging import OutboxEvent
 def claim_batch(session: Session, limit: int) -> list[OutboxEvent]:
     """Lock and return up to `limit` unpublished events, oldest first.
 
-    Ordering by id is what preserves per-account ordering: events are
-    inserted in commit order, so publishing in id order publishes in
-    commit order. The lock is held until the caller's transaction ends.
+    Ordering by id preserves per-account ordering, though id order is not
+    commit order in general: ids are assigned at INSERT. It holds per
+    partition key because two payments debiting the same account are
+    serialised by that account's row lock, and the outbox row is inserted
+    while the lock is held. The lock taken here is held until the caller's
+    transaction ends.
     """
     stmt = (
         select(OutboxEvent)

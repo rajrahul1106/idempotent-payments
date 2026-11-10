@@ -74,6 +74,32 @@ def require_role(required: Role):
     return _check
 
 
+# Blueprint decision D4. The role order above says which endpoints a role
+# may call; this says which rows it may see. viewer and operator read
+# everything. Any other role, which today means client, reads only the
+# account its token names.
+READ_ALL_ROLES: frozenset[str] = frozenset({"viewer", "operator"})
+
+
+def can_read_account(principal: Principal, account_id: str) -> bool:
+    if principal.role in READ_ALL_ROLES:
+        return True
+    return principal.account_id is not None and principal.account_id == account_id
+
+
+def require_account_access(
+    account_id: str,
+    principal: Principal = Depends(require_role("viewer")),
+) -> Principal:
+    """Read access to one account: viewer and operator any, client its own."""
+    if not can_read_account(principal, account_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Clients may read only their own account",
+        )
+    return principal
+
+
 def rate_limit(request: Request) -> None:
     """In-memory token bucket, per subject.
 
