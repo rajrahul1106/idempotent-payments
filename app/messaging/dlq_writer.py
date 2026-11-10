@@ -10,8 +10,9 @@ Per message:
     commit the Kafka offset
 
 The failure history comes from the headers the main consumer set: attempts
-from attempt_count, reason from last_error, plus first_failed_at and
-original_topic. A missing header is filled from what the message itself
+from attempt_count, reason from last_error, every attempt from
+failure_history, plus first_failed_at, original_topic and the traceparent
+of the attempt that sent it here (migration 0003). A missing header is filled from what the message itself
 shows rather than refused, because this is the last stop: a message the
 writer refused would be lost.
 
@@ -34,11 +35,14 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
+from opentelemetry.trace import SpanKind
+
 from app.core.config import settings
+from app.core.telemetry import context_from, setup_tracing, shutdown_tracing, tracer
 from app.messaging import topics
 from app.messaging.consumer import decode_headers
 from app.messaging.consumer_base import ConsumerLoop, ProcessingError
-from app.messaging.failures import FailureKind, attempt_count, classify
+from app.messaging.failures import FailureKind, attempt_count, classify, failure_history
 from app.services.dlq import (
     NIL_EVENT_ID,
     DeadLetter,
@@ -49,6 +53,7 @@ from app.services.dlq import (
 )
 
 logger = logging.getLogger(__name__)
+_tracer = tracer(__name__)
 
 
 def _parse_time(value: str | None) -> dt.datetime | None:
@@ -89,6 +94,8 @@ def dead_letter_from(
         else dt.datetime.now(dt.timezone.utc)
     )
     return DeadLetter(
+        traceparent=headers.get(topics.HEADER_TRACEPARENT) or None,
+        failure_history=failure_history(headers),
         dedup_id=dedup_id_for(
             event_id, headers.get(topics.HEADER_REPLAY_OF), f"{topic}|{partition}|{offset}"
         ),
@@ -129,6 +136,7 @@ class DlqWriter(ConsumerLoop):
             db_backoff=db_backoff,
         )
         self.stats = WriterStats()
+        self._last_outcome = ""
 
     def _on_close(self) -> None:
         logger.info(
@@ -136,6 +144,23 @@ class DlqWriter(ConsumerLoop):
         )
 
     def _handle(self, message) -> bool:
+        headers = decode_headers(message.headers())
+        with _tracer.start_as_current_span(
+            "dlq write",
+            context=context_from(headers.get(topics.HEADER_TRACEPARENT)),
+            kind=SpanKind.CONSUMER,
+            attributes={
+                "event_id": headers.get(topics.HEADER_EVENT_ID, ""),
+                "attempt_count": attempt_count(headers),
+                "messaging.system": "kafka",
+                "messaging.source.name": message.topic(),
+            },
+        ) as span:
+            handled = self._write(message)
+            span.set_attribute("outcome", self._last_outcome)
+            return handled
+
+    def _write(self, message) -> bool:
         _kind, millis = message.timestamp()
         letter = dead_letter_from(
             message.headers(),
@@ -149,6 +174,7 @@ class DlqWriter(ConsumerLoop):
             written = record_dead_letter(letter, self.group_id)
         except Exception as exc:
             if classify(exc) is FailureKind.INFRASTRUCTURE:
+                self._last_outcome = "held_for_database"
                 self.stats.held_for_database += 1
                 self._hold_for_database(message, exc)
                 return False
@@ -162,6 +188,7 @@ class DlqWriter(ConsumerLoop):
 
         self._database_ok(message)
         self._commit(message)
+        self._last_outcome = "written" if written else "skipped"
         if written:
             self.stats.written += 1
             logger.error(
@@ -194,11 +221,14 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
+    setup_tracing("dlq-writer")
     try:
         DlqWriter().run(stop)
     except ProcessingError:
         logger.exception("DLQ writer cannot continue")
         return 1
+    finally:
+        shutdown_tracing()
     return 0
 
 

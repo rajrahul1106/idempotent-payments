@@ -49,6 +49,8 @@ def _out(row: DlqRow) -> DlqMessageOut:
         first_failed_at=row.first_failed_at,
         created_at=row.created_at,
         replayed_at=row.replayed_at,
+        traceparent=row.traceparent,
+        failure_history=json.loads(row.failure_history_json, parse_float=Decimal),
         # Decimal, never float. Pydantic writes a Decimal as a JSON string.
         payload=json.loads(row.payload_json, parse_float=Decimal),
     )

@@ -54,6 +54,20 @@ class Settings(BaseSettings):
     # --- outbox relay ----------------------------------------------------
     outbox_poll_interval_ms: int = 200
     outbox_batch_size: int = 100
+    # LISTEN on the 'outbox' channel and wake as soon as a payment commits.
+    # Polling continues either way; it is the correctness guarantee (§15).
+    outbox_listen_enabled: bool = True
+
+    # --- tracing (Phase 7a) ----------------------------------------------
+    # OTLP over gRPC. Compose points this at the Jaeger collector.
+    otel_enabled: bool = True
+    otel_exporter_otlp_endpoint: str = "http://localhost:4317"
+    otel_export_timeout_seconds: int = 5
+
+    # --- reconciliation (Phase 7a) ----------------------------------------
+    reconciliation_interval_seconds: int = 300
+    # I3: an unpublished outbox row older than this is a warning.
+    reconciliation_outbox_warn_seconds: int = 60
 
     # --- security --------------------------------------------------------
     jwt_secret: str = "dev-only-insecure-secret-change-me"

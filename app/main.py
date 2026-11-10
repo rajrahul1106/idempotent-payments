@@ -12,9 +12,14 @@ from fastapi.responses import JSONResponse
 
 from app.api.errors import register_error_handlers
 from app.core.config import settings
+from app.core.telemetry import setup_tracing, shutdown_tracing
 from app.db.session import ping
 
 logging.basicConfig(level=settings.log_level)
+
+# The api process's tracer provider. A no-op if one is already installed
+# (the test suite installs an in-memory one before importing this module).
+setup_tracing("api")
 
 
 @asynccontextmanager
@@ -26,6 +31,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from app.api.routes.dlq import close_replay_producer
 
     close_replay_producer()
+    shutdown_tracing()
 
 
 app = FastAPI(
@@ -85,3 +91,15 @@ def _register_routers() -> None:
 
 
 _register_routers()
+
+
+def _instrument() -> None:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    # One server span per request. Probes are not traced. Request and
+    # response headers and bodies are not captured (the instrumentation's
+    # default), so no bearer token or request body reaches a span.
+    FastAPIInstrumentor.instrument_app(app, excluded_urls="health,ready,metrics")
+
+
+_instrument()

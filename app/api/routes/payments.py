@@ -6,6 +6,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from fastapi.responses import JSONResponse
+from opentelemetry import trace
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -16,6 +17,7 @@ from app.api.deps import (
     require_role,
 )
 from app.core.exceptions import DomainError
+from app.core.telemetry import current_traceparent, key_digest
 from app.db.models.ledger import Transaction
 from app.schemas.payments import PaymentRequest
 from app.services.payment import Actor, PaymentCommand, create_payment
@@ -46,6 +48,12 @@ def create(
     except ValueError:
         raise MissingIdempotencyKey("Idempotency-Key must be a UUID")
 
+    # Attributes on the request's server span (§5.8). The key is hashed:
+    # a raw idempotency key never goes into a trace.
+    span = trace.get_current_span()
+    span.set_attribute("account_id", body.from_account_id)
+    span.set_attribute("idempotency_key.sha256_prefix", key_digest(idempotency_key))
+
     command = PaymentCommand(
         idempotency_key=idempotency_key,
         from_account_id=body.from_account_id,
@@ -54,11 +62,17 @@ def create(
         currency=body.currency,
         reference=body.reference,
         metadata=body.metadata,
-        traceparent=traceparent,
+        # This request's own span context, so the relay and consumer spans
+        # join this trace. It is a child of the caller's traceparent when
+        # one was sent. Without tracing, the caller's header is kept as is.
+        traceparent=current_traceparent() or traceparent,
         actor=Actor(role=principal.role, account_id=principal.account_id),
     )
 
     result = create_payment(command)
+    if result.body.get("event_id"):
+        span.set_attribute("event_id", result.body["event_id"])
+    span.set_attribute("payment.replayed", result.replayed)
 
     headers = {"Idempotency-Replayed": "true"} if result.replayed else {}
     return JSONResponse(

@@ -59,6 +59,26 @@ os.environ["DATABASE_URL"] = (
 )
 
 
+# The test process is the api process for tracing. Its tracer provider is
+# installed here, before any test module imports app.main, so app.main's
+# setup_tracing("api") finds it and does nothing. Spans are exported
+# synchronously into memory, and never to a real collector.
+from app.core.telemetry import setup_tracing  # noqa: E402
+from tests.tracing import EXTRA, SPANS  # noqa: E402
+
+setup_tracing("api", exporter=SPANS, synchronous=True).add_span_processor(EXTRA)
+
+
+@pytest.fixture
+def spans():
+    """Spans ended during this test, as dicts (see tests/tracing.py)."""
+    SPANS.clear()
+    SPANS.recording = True
+    yield SPANS
+    SPANS.recording = False
+    SPANS.clear()
+
+
 def pytest_configure(config):
     if _REFUSAL:
         raise pytest.UsageError(_REFUSAL)

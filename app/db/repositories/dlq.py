@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 
 _COLUMNS = (
     "id, event_id::text AS event_id, original_topic, payload::text AS payload_json, "
-    "reason, attempts, first_failed_at, created_at, replayed_at"
+    "reason, attempts, first_failed_at, created_at, replayed_at, traceparent, "
+    "failure_history::text AS failure_history_json"
 )
 
 
@@ -30,6 +31,8 @@ class DlqRow:
     first_failed_at: dt.datetime
     created_at: dt.datetime
     replayed_at: dt.datetime | None
+    traceparent: str | None = None
+    failure_history_json: str = "[]"
 
 
 def insert(
@@ -41,13 +44,16 @@ def insert(
     reason: str,
     attempts: int,
     first_failed_at: dt.datetime,
+    traceparent: str | None = None,
+    failure_history_json: str = "[]",
 ) -> int:
     return session.execute(
         text(
             "INSERT INTO dlq_messages "
-            "(event_id, original_topic, payload, reason, attempts, first_failed_at) "
+            "(event_id, original_topic, payload, reason, attempts, first_failed_at, "
+            "traceparent, failure_history) "
             "VALUES (:event_id, :original_topic, CAST(:payload AS jsonb), :reason, "
-            ":attempts, :first_failed_at) RETURNING id"
+            ":attempts, :first_failed_at, :traceparent, CAST(:history AS jsonb)) RETURNING id"
         ),
         {
             "event_id": event_id,
@@ -56,6 +62,8 @@ def insert(
             "reason": reason,
             "attempts": attempts,
             "first_failed_at": first_failed_at,
+            "traceparent": traceparent,
+            "history": failure_history_json,
         },
     ).scalar_one()
 

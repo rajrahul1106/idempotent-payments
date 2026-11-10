@@ -320,26 +320,6 @@ def test_crash_between_forward_and_offset_commit(kafka, make_ladder, group_id, p
 # --- 5. operator replay ----------------------------------------------------------------
 
 
-@pytest.fixture
-def replay_to(client):
-    """Point the replay endpoint's producer at a test ladder's main topic."""
-    from app.api.routes.dlq import replay_target
-    from app.main import app
-    from app.messaging.producer import KafkaProducer
-
-    producers = []
-
-    def _point(bootstrap: str, topic: str) -> None:
-        producer = KafkaProducer(bootstrap, client_id="test-replay")
-        producers.append(producer)
-        app.dependency_overrides[replay_target] = lambda: (producer, topic)
-
-    yield _point
-    app.dependency_overrides.pop(replay_target, None)
-    for producer in producers:
-        producer.close()
-
-
 def test_replay_applies_once_and_is_operator_only(
     kafka, make_ladder, group_id, pipeline, client, operator_token, client_token, replay_to
 ):

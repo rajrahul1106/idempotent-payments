@@ -48,6 +48,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     ports:
       - "8000:8000"
     depends_on:
@@ -64,6 +65,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     depends_on:
       postgres:
         condition: service_healthy
@@ -90,6 +92,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     depends_on:
       postgres:
         condition: service_healthy
@@ -108,6 +111,7 @@ services:
     command: python -m app.messaging.retry_tier 0
     environment:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     depends_on:
       topics:
         condition: service_completed_successfully
@@ -118,6 +122,7 @@ services:
     command: python -m app.messaging.retry_tier 1
     environment:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     depends_on:
       topics:
         condition: service_completed_successfully
@@ -128,6 +133,7 @@ services:
     command: python -m app.messaging.retry_tier 2
     environment:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     depends_on:
       topics:
         condition: service_completed_successfully
@@ -140,11 +146,25 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     depends_on:
       postgres:
         condition: service_healthy
       topics:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  # The four invariant checks (I1 to I4) every RECONCILIATION_INTERVAL_SECONDS
+  # (default 300), each result written to reconciliation_runs.
+  reconciliation:
+    build: .
+    command: python -m app.services.reconciliation
+    environment:
+      DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   prometheus:

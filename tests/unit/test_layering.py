@@ -41,6 +41,8 @@ print(",".join(web))
         "app.messaging.failures",
         "app.services.dlq",
         "app.db.errors",
+        "app.core.telemetry",
+        "app.services.reconciliation",
         "app.core.exceptions",
     ],
 )

@@ -18,23 +18,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 # Domain exceptions live in app.core so services never import the web
 # framework. This module only maps them onto the error body.
 from app.core.exceptions import DomainError
+from app.core.telemetry import current_trace_id
 from app.db.errors import database_unavailable
 
 logger = logging.getLogger(__name__)
-
-
-def _current_trace_id() -> str:
-    """Trace id if OpenTelemetry is wired up (Phase 7), empty string before."""
-    try:
-        from opentelemetry import trace
-
-        span = trace.get_current_span()
-        ctx = span.get_span_context()
-        if ctx.is_valid:
-            return format(ctx.trace_id, "032x")
-    except Exception:
-        pass
-    return ""
 
 
 def _body(code: str, message: str, request: Request) -> dict:
@@ -43,7 +30,7 @@ def _body(code: str, message: str, request: Request) -> dict:
             "code": code,
             "message": message,
             "request_id": getattr(request.state, "request_id", str(uuid.uuid4())),
-            "trace_id": _current_trace_id(),
+            "trace_id": current_trace_id(),
         }
     }
 

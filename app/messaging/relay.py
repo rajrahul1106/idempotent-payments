@@ -46,7 +46,16 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
+from opentelemetry.trace import SpanKind, Status, StatusCode
+
 from app.core.config import settings
+from app.core.telemetry import (
+    context_from,
+    current_traceparent,
+    setup_tracing,
+    shutdown_tracing,
+    tracer,
+)
 from app.db.repositories import outbox as outbox_repo
 from app.db.session import engine, unit_of_work
 from app.messaging import topics
@@ -91,6 +100,51 @@ def _serialise(event) -> tuple[bytes, dict[str, str]]:
     return value, headers
 
 
+_tracer = tracer(__name__)
+
+
+def _publish_one(producer: Producer, event, topic: str) -> str | None:
+    """Publish one outbox row inside its own span. None if acknowledged,
+    otherwise the error.
+
+    The span is a child of the traceparent the API stored on the row, and
+    the message carries this span's traceparent, so the consumer's span
+    becomes its child: one trace from the HTTP request onwards.
+    """
+    value, headers = _serialise(event)
+    with _tracer.start_as_current_span(
+        "outbox publish",
+        context=context_from(event.traceparent),
+        kind=SpanKind.PRODUCER,
+        attributes={
+            "event_id": event.event_id,
+            "account_id": event.partition_key,
+            "messaging.system": "kafka",
+            "messaging.destination.name": topic,
+        },
+    ) as span:
+        traceparent = current_traceparent()
+        if traceparent:
+            headers[topics.HEADER_TRACEPARENT] = traceparent
+        try:
+            producer.publish(
+                topic=topic,
+                key=event.partition_key,
+                value=value,
+                headers=headers,
+            )
+        except PublishError as exc:
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, "not acknowledged"))
+            logger.warning(
+                "relay publish failed, stopping batch at event %s: %s",
+                event.event_id,
+                exc,
+            )
+            return str(exc)
+    return None
+
+
 def publish_batch(
     session: Session,
     producer: Producer,
@@ -109,24 +163,12 @@ def publish_batch(
     acknowledged: list[int] = []
 
     for event in batch:
-        value, headers = _serialise(event)
-        try:
-            producer.publish(
-                topic=topic,
-                key=event.partition_key,
-                value=value,
-                headers=headers,
-            )
-        except PublishError as exc:
+        error = _publish_one(producer, event, topic)
+        if error is not None:
             # Leave this row and every row after it unpublished. They are
             # the next tick's first rows, in the same order.
             result.failed_event_id = event.event_id
-            result.error = str(exc)
-            logger.warning(
-                "relay publish failed, stopping batch at event %s: %s",
-                event.event_id,
-                exc,
-            )
+            result.error = error
             break
 
         acknowledged.append(event.id)
@@ -201,11 +243,75 @@ def _still_holds(lock: Connection) -> bool:
         return False
 
 
+class OutboxListener:
+    """LISTEN on the outbox channel, on a connection of its own.
+
+    A wake-up, never a source of truth. `wait` returns as soon as a payment
+    commits, or after the poll interval if nothing arrives, and the relay
+    polls either way. A notification sent while this connection was down is
+    simply missed: the next poll finds the row. If LISTEN cannot be set up,
+    `wait` degrades to a plain sleep and retries LISTEN on the next call.
+
+    It does not touch the advisory lock connection, so D1 is unchanged.
+    """
+
+    def __init__(self, conninfo: str | None = None) -> None:
+        self._conninfo = conninfo or engine.url.set(drivername="postgresql").render_as_string(
+            hide_password=False
+        )
+        self._conn = None
+        self.notifications = 0
+
+    def _connect(self):
+        import psycopg
+
+        conn = psycopg.connect(self._conninfo, autocommit=True, connect_timeout=5)
+        conn.execute(f"LISTEN {outbox_repo.NOTIFY_CHANNEL}")
+        logger.info("relay listening on channel %r", outbox_repo.NOTIFY_CHANNEL)
+        return conn
+
+    def wait(self, timeout: float, stop: threading.Event) -> bool:
+        """Block up to `timeout` seconds. True if a payment committed meanwhile."""
+        import psycopg
+
+        try:
+            if self._conn is None or self._conn.closed:
+                self._conn = self._connect()
+            for _ in self._conn.notifies(timeout=timeout, stop_after=1):
+                self.notifications += 1
+                return True
+            return False
+        except psycopg.Error as exc:
+            logger.warning("relay LISTEN unavailable, polling only for now: %s", exc)
+            self.close()
+            stop.wait(timeout)
+            return False
+
+    def close(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:  # pragma: no cover - closing a broken connection
+                pass
+            self._conn = None
+
+
 def _publish_while_locked(
-    lock: Connection, producer: Producer, stop: threading.Event
+    lock: Connection,
+    producer: Producer,
+    stop: threading.Event,
+    *,
+    interval: float,
+    listener: OutboxListener | None,
 ) -> None:
-    interval = settings.outbox_poll_interval_ms / 1000.0
     backoff = interval
+
+    def idle_wait(seconds: float) -> None:
+        if listener is not None:
+            listener.wait(seconds, stop)
+        else:
+            stop.wait(seconds)
+
     while not stop.is_set():
         if not _still_holds(lock):
             # The lock went with its connection, so another relay may now
@@ -232,8 +338,8 @@ def _publish_while_locked(
             # Broker trouble. Wait before hammering it again.
             stop.wait(min(interval * 5, 5.0))
         elif result.claimed == 0:
-            # Idle: nothing committed since the last tick.
-            stop.wait(interval)
+            # Idle. Sleep until the next poll, or until a payment commits.
+            idle_wait(interval)
 
 
 def run_forever(
@@ -241,22 +347,31 @@ def run_forever(
     stop: threading.Event | None = None,
     *,
     lock_retry_seconds: float = LOCK_RETRY_SECONDS,
+    poll_interval: float | None = None,
+    listen: bool | None = None,
 ) -> None:
     """Poll until told to stop, publishing only while holding the relay lock.
 
-    Polling, not LISTEN/NOTIFY. A missed notification would strand a row
-    indefinitely, so the poll is the correctness guarantee. Phase 7 adds
-    NOTIFY on top of it to cut latency, never in place of it.
+    Polling is the correctness guarantee: a missed notification must never
+    strand a row. With `listen` (default: settings.outbox_listen_enabled)
+    the idle wait between polls also ends the moment a payment commits,
+    which cuts publish delay from up to one poll interval to milliseconds.
 
     run_once does not take the lock; it is the unit the tests drive.
     """
     stop = stop or threading.Event()
+    interval = (
+        poll_interval if poll_interval is not None else settings.outbox_poll_interval_ms / 1000.0
+    )
+    listen = settings.outbox_listen_enabled if listen is None else listen
     logger.info(
-        "relay started: topic=%s batch=%d interval=%dms",
+        "relay started: topic=%s batch=%d interval=%.3fs listen=%s",
         topics.MAIN_TOPIC,
         settings.outbox_batch_size,
-        settings.outbox_poll_interval_ms,
+        interval,
+        listen,
     )
+    listener = OutboxListener() if listen else None
     try:
         while not stop.is_set():
             lock = _acquire_relay_lock(stop, lock_retry_seconds)
@@ -265,10 +380,14 @@ def run_forever(
             try:
                 # Built only once this relay is the one publishing.
                 producer = producer or build_producer()
-                _publish_while_locked(lock, producer, stop)
+                _publish_while_locked(
+                    lock, producer, stop, interval=interval, listener=listener
+                )
             finally:
                 lock.close()  # releases the advisory lock
     finally:
+        if listener is not None:
+            listener.close()
         if producer is not None:
             producer.close()
         logger.info("relay stopped")
@@ -288,7 +407,11 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle)
     signal.signal(signal.SIGINT, _handle)
 
-    run_forever(stop=stop)
+    setup_tracing("relay")
+    try:
+        run_forever(stop=stop)
+    finally:
+        shutdown_tracing()
 
 
 if __name__ == "__main__":

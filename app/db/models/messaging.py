@@ -141,7 +141,7 @@ class PaymentEventProjection(Base):
 
 
 class DlqMessage(Base):
-    """A message that exhausted every retry tier."""
+    """A message that failed permanently or exhausted every retry tier."""
 
     __tablename__ = "dlq_messages"
 
@@ -158,6 +158,12 @@ class DlqMessage(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     replayed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # Migration 0003. The trace context of the attempt that sent it here, and
+    # one {attempt, topic, error, at} entry per failed attempt.
+    traceparent: Mapped[str | None] = mapped_column(Text)
+    failure_history: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
 
     __table_args__ = (
         Index(

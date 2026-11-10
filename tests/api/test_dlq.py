@@ -193,19 +193,25 @@ def test_redelivered_dead_letter_writes_one_row(recorded):
 
 
 
-def test_api_shutdown_flushes_and_closes_the_replay_producer(client):
+def test_api_shutdown_flushes_and_closes_the_replay_producer(client, monkeypatch):
     from fastapi.testclient import TestClient
 
+    import app.main as main
     from app.api.routes import dlq as dlq_routes
-    from app.main import app
+
+    # Shutdown also flushes tracing. Here that is recorded, not done: the
+    # suite's tracer provider is shared by every test after this one.
+    tracing_flushed = []
+    monkeypatch.setattr(main, "shutdown_tracing", lambda: tracing_flushed.append(True))
 
     recording = RecordingProducer()
     dlq_routes._producer = recording
     try:
-        with TestClient(app):  # runs the lifespan: startup, then shutdown
+        with TestClient(main.app):  # runs the lifespan: startup, then shutdown
             assert not recording.closed
         assert recording.closed
         assert dlq_routes._producer is None
+        assert tracing_flushed == [True]
     finally:
         dlq_routes._producer = None
 

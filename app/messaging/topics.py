@@ -44,6 +44,10 @@ HEADER_FIRST_FAILED_AT = "first_failed_at"
 HEADER_LAST_ERROR = "last_error"
 #: The topic the message was first consumed from.
 HEADER_ORIGINAL_TOPIC = "original_topic"
+#: JSON list, one entry per failed attempt: {attempt, topic, error, at}.
+#: `topic` is where the message was sent after that attempt. Each forward
+#: appends one entry; the DLQ writer stores the whole list.
+HEADER_FAILURE_HISTORY = "failure_history"
 #: Set by an operator replay to the dlq_messages id being replayed. A replay
 #: that fails again is a new failure, so the DLQ writer dedups per replay.
 HEADER_REPLAY_OF = "replay_of"

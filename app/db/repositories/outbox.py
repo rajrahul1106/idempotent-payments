@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.db.models.messaging import OutboxEvent
@@ -76,3 +76,20 @@ def oldest_unpublished_age_seconds(session: Session) -> float | None:
     if oldest.tzinfo is None:
         oldest = oldest.replace(tzinfo=dt.timezone.utc)
     return (dt.datetime.now(dt.timezone.utc) - oldest).total_seconds()
+
+
+#: The LISTEN/NOTIFY channel the relay wakes on.
+NOTIFY_CHANNEL = "outbox"
+
+
+def notify(session: Session, event_id: str) -> None:
+    """Wake the relay when this transaction commits.
+
+    Postgres delivers a NOTIFY only on COMMIT and drops it on ROLLBACK, so
+    the relay is never woken for a row that does not exist. It is a hint:
+    a relay that misses it still finds the row on its next poll.
+    """
+    session.execute(
+        text("SELECT pg_notify(:channel, :event_id)"),
+        {"channel": NOTIFY_CHANNEL, "event_id": event_id},
+    )

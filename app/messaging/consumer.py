@@ -45,8 +45,18 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+from opentelemetry.trace import SpanKind, Status, StatusCode
+
 from app.core.config import settings
 from app.core.money import MAX_AMOUNT_MINOR
+from app.core.telemetry import (
+    context_from,
+    current_trace_id,
+    current_traceparent,
+    setup_tracing,
+    shutdown_tracing,
+    tracer,
+)
 from app.messaging import topics
 from app.messaging.consumer_base import (
     BROKER_RETRY_SECONDS,
@@ -64,6 +74,7 @@ from app.messaging.producer import KafkaProducer, Producer, PublishError
 from app.services.payment_events import PaymentPosted, apply_payment_posted
 
 logger = logging.getLogger(__name__)
+_tracer = tracer(__name__)
 
 EVENT_TYPE = "payment.posted"
 SUPPORTED_SCHEMA_VERSIONS = frozenset({1})
@@ -236,8 +247,28 @@ class PaymentEventConsumer(ConsumerLoop):
     def _handle(self, message) -> bool:
         headers = decode_headers(message.headers())
         attempts = attempt_count(headers)
+        # A child of the traceparent the message carries: the relay's publish
+        # span on a first delivery, a retry tier's span after that, an
+        # operator replay's span on a replay. One payment stays one trace.
+        with _tracer.start_as_current_span(
+            "payment.posted process",
+            context=context_from(headers.get(topics.HEADER_TRACEPARENT)),
+            kind=SpanKind.CONSUMER,
+            attributes={
+                "event_id": headers.get(topics.HEADER_EVENT_ID, ""),
+                "attempt_count": attempts,
+                "messaging.system": "kafka",
+                "messaging.source.name": message.topic(),
+                "messaging.kafka.partition": message.partition(),
+                "messaging.kafka.offset": message.offset(),
+            },
+        ) as span:
+            return self._process(message, headers, attempts, span)
+
+    def _process(self, message, headers: dict[str, str], attempts: int, span) -> bool:
         try:
             event = parse_payment_posted(message.headers(), message.value())
+            span.set_attribute("account_id", event.from_account_id)
             effect = None
             if self._side_effect is not None:
                 side_effect = self._side_effect
@@ -248,11 +279,15 @@ class PaymentEventConsumer(ConsumerLoop):
             applied = apply_payment_posted(event, self.group_id, before_effect=effect)
         except Exception as exc:
             kind = classify(exc)
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, kind.value))
+            span.set_attribute("failure.kind", kind.value)
             if kind is FailureKind.INFRASTRUCTURE:
+                span.set_attribute("outcome", "held_for_database")
                 self.stats.held_for_database += 1
                 self._hold_for_database(message, exc)
                 return False
-            return self._forward(message, headers, kind, exc, attempts)
+            return self._forward(message, headers, kind, exc, attempts, span)
 
         self._database_ok(message)
         # The database transaction has committed. Only now may the offset move.
@@ -260,6 +295,7 @@ class PaymentEventConsumer(ConsumerLoop):
             self._after_db_commit(event, applied)
         self._commit(message)
 
+        span.set_attribute("outcome", "applied" if applied else "skipped")
         if applied:
             self.stats.applied += 1
         else:
@@ -271,26 +307,40 @@ class PaymentEventConsumer(ConsumerLoop):
         return True
 
     def _forward(
-        self, message, headers: dict[str, str], kind: FailureKind, exc: Exception, attempts: int
+        self,
+        message,
+        headers: dict[str, str],
+        kind: FailureKind,
+        exc: Exception,
+        attempts: int,
+        span,
     ) -> bool:
         """Decision D7: acknowledged on the next topic first, offset second."""
         self._database_ok(message)  # the database answered; it refused this message
         target = (
             self.ladder.dlq if kind is FailureKind.PERMANENT else self.ladder.next_topic(attempts)
         )
-        forwarded = failure_headers(headers, kind=kind, exc=exc, source_topic=message.topic())
+        forwarded = failure_headers(
+            headers, kind=kind, exc=exc, source_topic=message.topic(), destination=target
+        )
+        # The next hop's span is a child of this attempt's span.
+        traceparent = current_traceparent()
+        if traceparent:
+            forwarded[topics.HEADER_TRACEPARENT] = traceparent
         to_dlq = target == self.ladder.dlq
+        span.set_attribute("outcome", "dead_lettered" if to_dlq else "retried")
+        span.set_attribute("forwarded_to", target)
         logger.log(
             logging.ERROR if to_dlq else logging.WARNING,
             "event %s at %s failed on attempt %d (%s), moving it to %s: %s "
-            "(traceparent=%s)",
+            "(trace_id=%s)",
             headers.get(topics.HEADER_EVENT_ID),
             self.where(message),
             attempts + 1,
             kind.value,
             target,
             forwarded[topics.HEADER_LAST_ERROR],
-            headers.get(topics.HEADER_TRACEPARENT),
+            current_trace_id() or None,
         )
         try:
             self._producer.publish(target, message.key(), message.value(), forwarded)
@@ -302,6 +352,7 @@ class PaymentEventConsumer(ConsumerLoop):
                 target,
                 publish_error,
             )
+            span.set_attribute("outcome", "held_for_broker")
             self._hold_for(message, BROKER_RETRY_SECONDS)
             return False
 
@@ -329,11 +380,14 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
+    setup_tracing("consumer")
     try:
         PaymentEventConsumer().run(stop)
     except ProcessingError:
         logger.exception("consumer cannot continue")
         return 1
+    finally:
+        shutdown_tracing()
     return 0
 
 

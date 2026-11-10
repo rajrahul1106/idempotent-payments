@@ -33,6 +33,7 @@ from app.core.money import format_amount, to_decimal, to_minor
 from app.db.models.ledger import Account, Posting, Transaction
 from app.db.models.messaging import IdempotencyKey, OutboxEvent
 from app.db.repositories import accounts as account_repo
+from app.db.repositories import outbox as outbox_repo
 from app.db.session import unit_of_work
 from app.services import idempotency
 
@@ -341,6 +342,8 @@ def _post_payment(
             traceparent=command.traceparent,
         )
     )
+    # Wakes the relay on commit (§15: NOTIFY on top of polling, never alone).
+    outbox_repo.notify(session, event_id)
 
     idempotency.complete(
         record,

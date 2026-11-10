@@ -12,7 +12,8 @@ operator replays that then fails again is a new failure and gets a new row,
 so a replay can never be silently swallowed.
 
 Replay. Republish to the main topic with attempt_count 0 and the original
-event_id, then stamp replayed_at. No database transaction is open during
+event_id, inside a span that continues the dead letter's stored trace,
+then stamp replayed_at. No database transaction is open during
 the publish. Two concurrent replays may both publish; the main consumer
 dedups on event_id, so the effect still happens once, and only the replay
 that stamps replayed_at gets 200.
@@ -29,7 +30,11 @@ import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 
+from opentelemetry import trace
+from opentelemetry.trace import Link, SpanKind, Status, StatusCode
+
 from app.core.exceptions import BrokerUnavailable, DlqAlreadyReplayed, DlqMessageNotFound
+from app.core.telemetry import context_from, current_traceparent, tracer
 from app.db.repositories import dlq as dlq_repo
 from app.db.repositories import events as events_repo
 from app.db.repositories.dlq import DlqRow
@@ -38,6 +43,7 @@ from app.messaging import topics
 from app.messaging.producer import Producer, PublishError
 
 logger = logging.getLogger(__name__)
+_tracer = tracer(__name__)
 
 #: A body that is not storable JSON is kept as {RAW_BODY_KEY: base64}, so the
 #: exact bytes survive into the table and back out on a replay.
@@ -58,6 +64,8 @@ class DeadLetter:
     reason: str
     attempts: int
     first_failed_at: dt.datetime
+    traceparent: str | None = None
+    failure_history: list = dataclasses.field(default_factory=list)
 
 
 # --- pure helpers -------------------------------------------------------------
@@ -127,6 +135,8 @@ def record_dead_letter(letter: DeadLetter, consumer_group: str) -> bool:
             reason=letter.reason,
             attempts=letter.attempts,
             first_failed_at=letter.first_failed_at,
+            traceparent=letter.traceparent,
+            failure_history_json=json.dumps(letter.failure_history),
         )
     return True
 
@@ -164,6 +174,50 @@ def replay_message(row: DlqRow) -> tuple[str | None, bytes, dict[str, str]]:
     return key, value, headers
 
 
+def _publish_replay(
+    row: DlqRow,
+    topic: str,
+    key: str | None,
+    value: bytes,
+    headers: dict[str, str],
+    producer: Producer,
+) -> None:
+    """Publish inside a span that continues the dead letter's own trace.
+
+    The operator's HTTP request is a separate trace; the replay span links
+    to it, so either trace leads to the other. The replayed message carries
+    the replay span's traceparent, so its processing joins the original
+    trace too.
+    """
+    request = trace.get_current_span().get_span_context()
+    original = context_from(row.traceparent)
+    links = [Link(request)] if original is not None and request.is_valid else []
+    with _tracer.start_as_current_span(
+        "dlq replay",
+        context=original,  # None: no stored trace, so a child of the request
+        kind=SpanKind.PRODUCER,
+        links=links,
+        attributes={
+            "event_id": row.event_id,
+            "dlq.message_id": row.id,
+            "attempt_count": 0,
+            "messaging.system": "kafka",
+            "messaging.destination.name": topic,
+            **({"account_id": key} if key else {}),
+        },
+    ) as span:
+        traceparent = current_traceparent()
+        if traceparent:
+            headers[topics.HEADER_TRACEPARENT] = traceparent
+        try:
+            producer.publish(topic, key, value, headers)
+        except PublishError as exc:
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, "not acknowledged"))
+            logger.error("replay of DLQ message %d not acknowledged: %s", row.id, exc)
+            raise BrokerUnavailable("The broker did not accept the replay; retry later") from exc
+
+
 def replay_dead_letter(message_id: int, producer: Producer, topic: str) -> DlqRow:
     with read_session() as session:
         row = dlq_repo.get(session, message_id)
@@ -176,11 +230,7 @@ def replay_dead_letter(message_id: int, producer: Producer, topic: str) -> DlqRo
         )
 
     key, value, headers = replay_message(row)
-    try:
-        producer.publish(topic, key, value, headers)
-    except PublishError as exc:
-        logger.error("replay of DLQ message %d not acknowledged: %s", message_id, exc)
-        raise BrokerUnavailable("The broker did not accept the replay; retry later") from exc
+    _publish_replay(row, topic, key, value, headers, producer)
 
     with unit_of_work() as session:
         replayed_at = dlq_repo.mark_replayed(session, message_id)

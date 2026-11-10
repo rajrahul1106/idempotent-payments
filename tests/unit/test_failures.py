@@ -98,7 +98,7 @@ def test_first_failure_sets_the_history_and_keeps_every_original_header():
     original = {"event_id": EVENT_ID, "traceparent": "00-abc-def-01", "schema_version": "1"}
     out = failure_headers(
         original, kind=FailureKind.TRANSIENT, exc=RuntimeError("boom\nline two"),
-        source_topic="m", now=now,
+        source_topic="m", destination="m.r5s", now=now,
     )
     assert out == {
         **original,
@@ -106,6 +106,11 @@ def test_first_failure_sets_the_history_and_keeps_every_original_header():
         "last_error": "transient: RuntimeError: boom line two",
         "first_failed_at": "2026-11-11T09:30:00+00:00",
         "original_topic": "m",
+        "failure_history": json.dumps(
+            [{"attempt": 1, "topic": "m.r5s", "error": "transient: RuntimeError: boom line two",
+              "at": "2026-11-11T09:30:00+00:00"}],
+            separators=(",", ":"),
+        ),
     }
 
 
@@ -118,7 +123,8 @@ def test_later_failures_keep_first_failed_at_and_original_topic():
         "last_error": "transient: X: old",
     }
     out = failure_headers(
-        earlier, kind=FailureKind.TRANSIENT, exc=RuntimeError("new"), source_topic="m.other"
+        earlier, kind=FailureKind.TRANSIENT, exc=RuntimeError("new"), source_topic="m.other",
+        destination="m.r10m",
     )
     assert out["attempt_count"] == "3"
     assert out["first_failed_at"] == "2026-11-11T09:30:00+00:00"
@@ -127,8 +133,39 @@ def test_later_failures_keep_first_failed_at_and_original_topic():
 
 
 def test_last_error_is_bounded():
-    out = failure_headers({}, kind=FailureKind.PERMANENT, exc=EventError("x" * 5000), source_topic="m")
+    out = failure_headers(
+        {}, kind=FailureKind.PERMANENT, exc=EventError("x" * 5000), source_topic="m",
+        destination="m.dlq",
+    )
     assert len(out["last_error"]) == 1000
+    [entry] = json.loads(out["failure_history"])
+    assert len(entry["error"]) == 500
+
+
+def test_each_forward_appends_one_history_entry():
+    headers: dict[str, str] = {"event_id": EVENT_ID}
+    for attempt, topic in enumerate(["m.r5s", "m.r1m", "m.r10m", "m.dlq"], start=1):
+        headers = failure_headers(
+            headers, kind=FailureKind.TRANSIENT, exc=RuntimeError(f"fail {attempt}"),
+            source_topic="m", destination=topic,
+        )
+    history = json.loads(headers["failure_history"])
+    assert [(e["attempt"], e["topic"], e["error"]) for e in history] == [
+        (1, "m.r5s", "transient: RuntimeError: fail 1"),
+        (2, "m.r1m", "transient: RuntimeError: fail 2"),
+        (3, "m.r10m", "transient: RuntimeError: fail 3"),
+        (4, "m.dlq", "transient: RuntimeError: fail 4"),
+    ]
+    assert len(headers["failure_history"]) < 1000  # a small header
+
+
+@pytest.mark.parametrize("raw", ["not json", '{"a": 1}', "[1, 2]"])
+def test_garbled_history_header_starts_a_fresh_history(raw):
+    out = failure_headers(
+        {"failure_history": raw, "attempt_count": "2"}, kind=FailureKind.TRANSIENT,
+        exc=RuntimeError("x"), source_topic="m", destination="m.r10m",
+    )
+    assert [e["attempt"] for e in json.loads(out["failure_history"])] == [3]
 
 
 @pytest.mark.parametrize("value, expected", [(None, 0), ("0", 0), ("3", 3), ("-2", 0), ("x", 0)])
@@ -165,6 +202,18 @@ def test_dead_letter_carries_the_failure_history():
     assert letter.original_topic == "m"
     assert letter.first_failed_at == dt.datetime(2026, 11, 11, 9, 30, tzinfo=dt.timezone.utc)
     assert letter.payload_json == body.decode()
+    assert letter.traceparent is None and letter.failure_history == []
+
+
+def test_dead_letter_keeps_traceparent_and_history():
+    history = [{"attempt": 1, "topic": "m.dlq", "error": "permanent: E: x", "at": "t"}]
+    letter = _letter(
+        {"event_id": EVENT_ID, "traceparent": "00-" + "a" * 32 + "-" + "b" * 16 + "-01",
+         "failure_history": json.dumps(history)},
+        b"{}",
+    )
+    assert letter.traceparent == "00-" + "a" * 32 + "-" + "b" * 16 + "-01"
+    assert letter.failure_history == history
 
 
 def test_dead_letter_without_headers_is_still_recorded():

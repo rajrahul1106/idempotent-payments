@@ -19,6 +19,16 @@ class DlqMessageOut(Model):
     first_failed_at: dt.datetime
     created_at: dt.datetime
     replayed_at: dt.datetime | None
+    traceparent: str | None = Field(
+        ..., description="W3C trace context of the attempt that sent it to the DLQ"
+    )
+    failure_history: list[dict[str, Any]] = Field(
+        ...,
+        description=(
+            "One entry per failed attempt: {attempt, topic, error, at}, where topic "
+            "is where the message was sent after that attempt"
+        ),
+    )
     payload: Any = Field(
         ...,
         description=(

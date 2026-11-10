@@ -509,3 +509,23 @@ def projected_event_ids(event_ids) -> list[str]:
                 {"ids": list(event_ids)},
             ).scalars()
         ]
+
+
+@pytest.fixture
+def replay_to(client):
+    """Point the replay endpoint's producer at a test ladder's main topic."""
+    from app.api.routes.dlq import replay_target
+    from app.main import app
+    from app.messaging.producer import KafkaProducer
+
+    producers = []
+
+    def _point(bootstrap: str, topic: str) -> None:
+        producer = KafkaProducer(bootstrap, client_id="test-replay")
+        producers.append(producer)
+        app.dependency_overrides[replay_target] = lambda: (producer, topic)
+
+    yield _point
+    app.dependency_overrides.pop(replay_target, None)
+    for producer in producers:
+        producer.close()

@@ -153,4 +153,8 @@ def test_message_key_is_the_partition_key_and_headers_carry_the_event(
     for message, event_id in zip(producer.messages, event_ids):
         assert message["topic"] == MAIN_TOPIC
         assert message["headers"][HEADER_EVENT_ID] == event_id
-        assert message["headers"][HEADER_TRACEPARENT] == traceparent
+        # Same trace, re-parented: the header is the relay's own publish span,
+        # a child of the stored context (decision D11).
+        _, trace, span, _ = message["headers"][HEADER_TRACEPARENT].split("-")
+        assert trace == traceparent.split("-")[1]
+        assert span != traceparent.split("-")[2]
