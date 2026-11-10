@@ -10,6 +10,7 @@ skips.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.core.money import to_decimal
@@ -31,11 +32,23 @@ class PaymentPosted:
     traceparent: str | None = None  # carried untouched; tracing is Phase 7
 
 
-def apply_payment_posted(event: PaymentPosted, consumer_group: str) -> bool:
-    """Apply the event in one transaction. True if applied, False if skipped."""
+def apply_payment_posted(
+    event: PaymentPosted,
+    consumer_group: str,
+    *,
+    before_effect: Callable[[], None] | None = None,
+) -> bool:
+    """Apply the event in one transaction. True if applied, False if skipped.
+
+    `before_effect` runs inside the transaction, only for an event not seen
+    before. If it raises, the transaction rolls back, dedup record included,
+    so the event can be tried again.
+    """
     with unit_of_work() as session:
         if not events_repo.mark_processed(session, event.event_id, consumer_group):
             return False
+        if before_effect is not None:
+            before_effect()
         events_repo.add_projection(
             session,
             PaymentEventProjection(

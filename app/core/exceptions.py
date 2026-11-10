@@ -63,3 +63,18 @@ class SameAccountTransfer(DomainError):
 class Forbidden(DomainError):
     status_code = 403
     code = "forbidden"
+
+
+class DlqMessageNotFound(DomainError):
+    status_code = 404
+    code = "dlq_message_not_found"
+
+
+class DlqAlreadyReplayed(DomainError):
+    status_code = 409
+    code = "dlq_already_replayed"
+
+
+class BrokerUnavailable(DomainError):
+    status_code = 503
+    code = "service_unavailable"

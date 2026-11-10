@@ -18,28 +18,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 # Domain exceptions live in app.core so services never import the web
 # framework. This module only maps them onto the error body.
 from app.core.exceptions import DomainError
+from app.db.errors import database_unavailable
 
 logger = logging.getLogger(__name__)
-
-# SQLSTATEs that mean the database is not there, as opposed to the database
-# refusing a statement. Class 08 is connection exceptions; 57P01 to 57P03
-# are admin shutdown, crash shutdown and "cannot connect now" (starting up).
-_UNAVAILABLE_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
-
-
-def database_unavailable(exc: OperationalError) -> bool:
-    """True when the error means Postgres cannot be reached (blueprint §8: 503).
-
-    A lock or statement timeout is also an OperationalError, but the database
-    answered, so it stays a 500.
-    """
-    if exc.connection_invalidated:
-        return True
-    sqlstate = getattr(exc.orig, "sqlstate", None)
-    if sqlstate is None:
-        # Raised by the driver itself: refused, reset or timed out connecting.
-        return True
-    return sqlstate.startswith("08") or sqlstate in _UNAVAILABLE_SQLSTATES
 
 
 def _current_trace_id() -> str:

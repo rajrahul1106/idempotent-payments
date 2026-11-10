@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -14,7 +16,20 @@ from app.db.session import ping
 
 logging.basicConfig(level=settings.log_level)
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    yield
+    # Shutdown. The DLQ replay producer is created on the first replay and
+    # lives as long as the process; flush and close it so a replay that was
+    # acknowledged-in-flight is not dropped by an abrupt exit.
+    from app.api.routes.dlq import close_replay_producer
+
+    close_replay_producer()
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="Idempotent Payment Event Processing System",
     version="0.1.0",
     description=(

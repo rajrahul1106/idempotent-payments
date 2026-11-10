@@ -7,6 +7,8 @@ spelling. Nothing in this module talks to a broker.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from app.core.config import settings
 
 # --- topics --------------------------------------------------------------
@@ -33,24 +35,67 @@ HEADER_EVENT_TYPE = "event_type"
 HEADER_SCHEMA_VERSION = "schema_version"
 HEADER_TRACEPARENT = "traceparent"
 
-# Set by the retry tiers in Phase 6, read here so the constant has one home.
+# The failure history a message carries through the retry tiers (§5.4).
+#: Failed attempts so far. Absent on a fresh message, "0" on a replay.
 HEADER_ATTEMPT_COUNT = "attempt_count"
+#: ISO 8601 UTC time of the first failure. Kept unchanged through the tiers.
 HEADER_FIRST_FAILED_AT = "first_failed_at"
+#: "<kind>: <ExceptionClass>: <message>", kind being permanent or transient.
 HEADER_LAST_ERROR = "last_error"
+#: The topic the message was first consumed from.
 HEADER_ORIGINAL_TOPIC = "original_topic"
+#: Set by an operator replay to the dlq_messages id being replayed. A replay
+#: that fails again is a new failure, so the DLQ writer dedups per replay.
+HEADER_REPLAY_OF = "replay_of"
 
 
-def next_retry_topic(attempt_count: int) -> str | None:
-    """The topic a message goes to after `attempt_count` failures.
+@dataclass(frozen=True)
+class TopicLadder:
+    """The main topic, its delay tiers in order, and the DLQ.
 
-    Returns the DLQ topic once the tiers are exhausted. Phase 6 uses this;
-    it lives here because the tier ladder is topic knowledge.
+    Production uses DEFAULT_LADDER. Tests build their own with unique names,
+    so a test failure can never land on a topic `make up` consumes.
+    """
+
+    main: str
+    retries: tuple[str, ...]
+    retry_delays: tuple[float, ...]
+    dlq: str
+
+    def __post_init__(self) -> None:
+        if len(self.retries) != len(self.retry_delays):
+            raise ValueError("one delay per retry topic")
+
+    @property
+    def all(self) -> tuple[str, ...]:
+        return (self.main, *self.retries, self.dlq)
+
+    def next_topic(self, attempt_count: int) -> str:
+        """Where a message goes when it fails with `attempt_count` earlier
+        failures behind it: the first tier for a fresh message, the DLQ once
+        every tier has been tried."""
+        if attempt_count < 0:
+            raise ValueError("attempt_count cannot be negative")
+        if attempt_count < len(self.retries):
+            return self.retries[attempt_count]
+        return self.dlq
+
+    def delay_of(self, retry_topic: str) -> float:
+        return self.retry_delays[self.retries.index(retry_topic)]
+
+
+DEFAULT_LADDER = TopicLadder(
+    main=MAIN_TOPIC,
+    retries=RETRY_TOPICS,
+    retry_delays=tuple(float(s) for s in settings.retry_tier_seconds),
+    dlq=DLQ_TOPIC,
+)
+
+
+def next_retry_topic(attempt_count: int) -> str:
+    """The production ladder's next topic. See TopicLadder.next_topic.
 
     >>> next_retry_topic(0) == RETRY_TOPICS[0]
     True
     """
-    if attempt_count < 0:
-        raise ValueError("attempt_count cannot be negative")
-    if attempt_count < len(RETRY_TOPICS):
-        return RETRY_TOPICS[attempt_count]
-    return DLQ_TOPIC
+    return DEFAULT_LADDER.next_topic(attempt_count)

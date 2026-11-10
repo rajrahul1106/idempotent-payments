@@ -20,7 +20,7 @@ down:  ## Stop the stack and drop volumes
 	docker compose down -v
 
 logs:  ## Tail logs for app services
-	docker compose logs -f api relay consumer
+	docker compose logs -f api relay consumer retry-5s retry-1m retry-10m dlq-writer
 
 topics:  ## Create Kafka topics (idempotent; also runs as a Compose service)
 	PYTHONPATH=. python -m app.messaging.topic_setup

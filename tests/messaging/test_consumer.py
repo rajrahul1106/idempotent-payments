@@ -8,7 +8,7 @@ the dedup record, and payment_events, the side effect.
 
 from __future__ import annotations
 
-import os
+import json
 import pathlib
 import random
 import signal
@@ -38,10 +38,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 # each database commit so the parent can kill it mid-batch. "crash" kills
 # itself after the Nth database commit, before that message's offset commit.
 _CONSUMER_PROCESS = f"""
-import os, signal, sys, time
+import json, os, signal, sys, time
 from app.messaging.consumer import PaymentEventConsumer
+from app.messaging.topics import TopicLadder
 
-topic, group, mode, arg = sys.argv[1:5]
+ladder_json, group, mode, arg = sys.argv[1:5]
+ladder = TopicLadder(**{{k: tuple(v) if isinstance(v, list) else v
+                         for k, v in json.loads(ladder_json).items()}})
 seen = 0
 
 def after_db_commit(event, applied):
@@ -54,15 +57,15 @@ def after_db_commit(event, applied):
         os.kill(os.getpid(), signal.SIGKILL)
 
 PaymentEventConsumer(
-    topic=topic, group_id=group, config_overrides={FAST_GROUP!r},
+    ladder=ladder, group_id=group, config_overrides={FAST_GROUP!r},
     after_db_commit=after_db_commit,
 ).run()
 """
 
 
-def _consumer_process(topic: str, group: str, mode: str, arg: str) -> subprocess.Popen:
+def _consumer_process(ladder, group: str, mode: str, arg: str) -> subprocess.Popen:
     return subprocess.Popen(
-        [sys.executable, "-c", _CONSUMER_PROCESS, topic, group, mode, arg],
+        [sys.executable, "-c", _CONSUMER_PROCESS, json.dumps(ladder.__dict__), group, mode, arg],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -77,7 +80,7 @@ def _spread(count: int, accounts: int) -> list:
 # --- 1. duplicates -------------------------------------------------------------
 
 
-def test_1000_events_with_300_duplicates_apply_exactly_700(kafka, fresh_topic, group_id, consumers):
+def test_1000_events_with_300_duplicates_apply_exactly_700(kafka, fresh_ladder, group_id, consumers):
     originals = _spread(700, accounts=40)
     rng = random.Random(7)
     messages = list(originals)
@@ -86,9 +89,9 @@ def test_1000_events_with_300_duplicates_apply_exactly_700(kafka, fresh_topic, g
         position = rng.randint(messages.index(duplicate) + 1, len(messages))
         messages.insert(position, duplicate)
     assert len(messages) == 1000
-    publish(kafka, fresh_topic, messages)
+    publish(kafka, fresh_ladder.main, messages)
 
-    running = consumers(topic=fresh_topic, group_id=group_id)
+    running = consumers(ladder=fresh_ladder, group_id=group_id)
     assert wait_for(lambda: running.stats.handled >= 1000), running.stats
     running.close()
 
@@ -103,12 +106,12 @@ def test_1000_events_with_300_duplicates_apply_exactly_700(kafka, fresh_topic, g
 
 
 def test_consumer_killed_mid_batch_then_restarted_applies_every_event_once(
-    kafka, fresh_topic, group_id, consumers
+    kafka, fresh_ladder, group_id, consumers
 ):
     events = _spread(300, accounts=30)
-    publish(kafka, fresh_topic, events)
+    publish(kafka, fresh_ladder.main, events)
 
-    victim = _consumer_process(fresh_topic, group_id, "slow", "0.01")
+    victim = _consumer_process(fresh_ladder, group_id, "slow", "0.01")
     try:
         assert wait_for(lambda: processed_count(group_id) >= 60), "consumer made no progress"
     finally:
@@ -118,7 +121,7 @@ def test_consumer_killed_mid_batch_then_restarted_applies_every_event_once(
     done_before_kill = processed_count(group_id)
     assert done_before_kill < 300, "killed too late to be mid-batch"
 
-    restarted = consumers(topic=fresh_topic, group_id=group_id)
+    restarted = consumers(ladder=fresh_ladder, group_id=group_id)
     assert wait_for(lambda: processed_count(group_id) == 300, timeout=90)
     restarted.close()
 
@@ -131,12 +134,12 @@ def test_consumer_killed_mid_batch_then_restarted_applies_every_event_once(
 
 
 def test_crash_after_db_commit_before_offset_commit_skips_the_redelivery(
-    kafka, fresh_topic, group_id, consumers
+    kafka, fresh_ladder, group_id, consumers
 ):
     events = _spread(100, accounts=10)
-    publish(kafka, fresh_topic, events)
+    publish(kafka, fresh_ladder.main, events)
 
-    victim = _consumer_process(fresh_topic, group_id, "crash", "40")
+    victim = _consumer_process(fresh_ladder, group_id, "crash", "40")
     line = victim.stdout.readline().split()
     victim.wait(timeout=30)
     assert line[:1] == ["crash-after-db-commit"], line
@@ -154,7 +157,7 @@ def test_crash_after_db_commit_before_offset_commit_skips_the_redelivery(
         ).scalar_one()
     assert recorded == 1
 
-    restarted = consumers(topic=fresh_topic, group_id=group_id)
+    restarted = consumers(ladder=fresh_ladder, group_id=group_id)
     assert wait_for(
         lambda: processed_count(group_id) == 100
         and crashed_event in restarted.stats.skipped_event_ids,
@@ -170,12 +173,12 @@ def test_crash_after_db_commit_before_offset_commit_skips_the_redelivery(
 
 
 def test_200_events_for_one_account_are_processed_in_publish_order(
-    kafka, fresh_topic, group_id, consumers
+    kafka, fresh_ladder, group_id, consumers
 ):
     events = [payment_event("acc_ordered", "acc_dst", 100 + i) for i in range(200)]
-    publish(kafka, fresh_topic, events)
+    publish(kafka, fresh_ladder.main, events)
 
-    running = consumers(topic=fresh_topic, group_id=group_id)
+    running = consumers(ladder=fresh_ladder, group_id=group_id)
     assert wait_for(lambda: processed_count(group_id) == 200)
     running.close()
 
@@ -187,10 +190,10 @@ def test_200_events_for_one_account_are_processed_in_publish_order(
 
 
 def test_two_consumers_in_one_group_apply_each_event_once(
-    kafka, fresh_topic, group_id, consumers
+    kafka, fresh_ladder, group_id, consumers
 ):
-    first = consumers(topic=fresh_topic, group_id=group_id)
-    second = consumers(topic=fresh_topic, group_id=group_id)
+    first = consumers(ladder=fresh_ladder, group_id=group_id)
+    second = consumers(ladder=fresh_ladder, group_id=group_id)
     assert wait_for(
         lambda: first.consumer.assignment
         and second.consumer.assignment
@@ -200,7 +203,7 @@ def test_two_consumers_in_one_group_apply_each_event_once(
     assert not first.consumer.assignment & second.consumer.assignment
 
     events = _spread(600, accounts=60)
-    publish(kafka, fresh_topic, events)
+    publish(kafka, fresh_ladder.main, events)
 
     assert wait_for(lambda: processed_count(group_id) == 600)
     first.close()
@@ -215,7 +218,7 @@ def test_two_consumers_in_one_group_apply_each_event_once(
 
 
 def test_payment_flows_from_api_through_relay_and_consumer(
-    kafka, fresh_topic, group_id, consumers, client, owner_token, make_account, clear_outbox
+    kafka, fresh_ladder, group_id, consumers, client, owner_token, make_account, clear_outbox
 ):
     from app.db.session import unit_of_work
     from app.messaging import relay
@@ -241,12 +244,12 @@ def test_payment_flows_from_api_through_relay_and_consumer(
     producer = KafkaProducer(bootstrap_servers=kafka)
     try:
         with unit_of_work() as session:
-            published = relay.publish_batch(session, producer, topic=fresh_topic)
+            published = relay.publish_batch(session, producer, topic=fresh_ladder.main)
     finally:
         producer.close()
     assert published.event_ids == [payment["event_id"]]
 
-    running = consumers(topic=fresh_topic, group_id=group_id)
+    running = consumers(ladder=fresh_ladder, group_id=group_id)
     assert wait_for(lambda: processed_count(group_id) == 1)
     running.close()
 

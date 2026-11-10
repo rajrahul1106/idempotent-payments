@@ -1,4 +1,4 @@
-"""Fixtures for the relay tests.
+"""Fixtures for the relay, consumer and retry/DLQ tests.
 
 `RecordingProducer` stands in for a broker. This is deliberate and it is
 not a mocked broker in the sense the blueprint rules out: what is under
@@ -171,11 +171,12 @@ def make_outbox_rows(clear_outbox):
     return _make
 
 
-# --- Phase 5: real Redpanda -----------------------------------------------
+# --- Phases 5 and 6: real Redpanda -------------------------------------------
 #
-# Every test gets its own topic and consumer group, named with this run's
-# id, so no test can see another's messages and nothing touches the topics
-# `make up` uses. Topics are deleted again at teardown.
+# Every test gets its own topics (a main topic, its retry tiers and its DLQ)
+# and its own consumer groups, named with this run's id, so no test can see
+# another's messages and no failure can land on a topic `make up` consumes.
+# Topics are deleted again at teardown.
 
 import re  # noqa: E402
 import threading  # noqa: E402
@@ -198,17 +199,40 @@ def wait_for(condition, timeout: float = 60.0, interval: float = 0.1) -> bool:
     return bool(condition())
 
 
+def _ladder_names(request) -> str:
+    label = re.sub(r"[^A-Za-z0-9._-]", "-", request.node.name)[:50]
+    return f"test.{RUN_ID}.{label}.{uuid.uuid4().hex[:6]}"
+
+
 @pytest.fixture
-def fresh_topic(kafka, request) -> str:
-    from confluent_kafka.admin import AdminClient
-
+def make_ladder(kafka, request):
+    """make_ladder(delays) -> a TopicLadder of fresh 6-partition topics:
+    main, one retry topic per delay, and a DLQ. Deleted at teardown."""
     from app.messaging.topic_setup import ensure_topics
+    from app.messaging.topics import TopicLadder
 
-    label = re.sub(r"[^A-Za-z0-9._-]", "-", request.node.name)[:60]
-    name = f"test.{RUN_ID}.{label}.{uuid.uuid4().hex[:6]}"
-    ensure_topics([name], partitions=6, bootstrap_servers=kafka)
-    yield name
-    delete_topics(kafka, [name])
+    created: list[str] = []
+
+    def _make(delays: tuple[float, ...] = (1.0, 1.0, 1.0)) -> TopicLadder:
+        base = _ladder_names(request)
+        ladder = TopicLadder(
+            main=base,
+            retries=tuple(f"{base}.retry{i}" for i in range(len(delays))),
+            retry_delays=tuple(delays),
+            dlq=f"{base}.dlq",
+        )
+        ensure_topics(list(ladder.all), partitions=6, bootstrap_servers=kafka)
+        created.extend(ladder.all)
+        return ladder
+
+    yield _make
+    if created:
+        delete_topics(kafka, created)
+
+
+@pytest.fixture
+def fresh_ladder(make_ladder):
+    return make_ladder()
 
 
 def delete_topics(bootstrap: str, names: list[str]) -> None:
@@ -283,13 +307,12 @@ def publish(bootstrap: str, topic: str, events) -> None:
     assert producer.flush(30) == 0, "broker did not acknowledge every message"
 
 
-class RunningConsumer:
-    """A real PaymentEventConsumer on a background thread."""
+class RunningLoop:
+    """A real ConsumerLoop (main consumer, retry tier or DLQ writer) on a
+    background thread."""
 
-    def __init__(self, **kwargs) -> None:
-        from app.messaging.consumer import PaymentEventConsumer
-
-        self.consumer = PaymentEventConsumer(config_overrides=FAST_GROUP, **kwargs)
+    def __init__(self, loop) -> None:
+        self.consumer = loop
         self.stop = threading.Event()
         self.error: BaseException | None = None
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -312,10 +335,20 @@ class RunningConsumer:
         assert self.error is None, f"consumer failed: {self.error!r}"
 
 
+class RunningConsumer(RunningLoop):
+    """A PaymentEventConsumer with short group timeouts."""
+
+    def __init__(self, **kwargs) -> None:
+        from app.messaging.consumer import PaymentEventConsumer
+
+        kwargs.setdefault("config_overrides", FAST_GROUP)
+        super().__init__(PaymentEventConsumer(**kwargs))
+
+
 @pytest.fixture
 def consumers():
     """Start consumers with start(**kwargs); all are stopped at teardown."""
-    started: list[RunningConsumer] = []
+    started: list[RunningLoop] = []
 
     def start(**kwargs) -> RunningConsumer:
         running = RunningConsumer(**kwargs)
@@ -323,10 +356,128 @@ def consumers():
         return running
 
     yield start
+    _stop_all(started)
+
+
+def _stop_all(started) -> None:
     for running in started:
         running.stop.set()
     for running in started:
         running.thread.join(timeout=30)
+
+
+class Pipeline:
+    """The whole Phase 6 path on one ladder: the main consumer, one consumer
+    per retry tier, and the DLQ writer, each in its own group."""
+
+    def __init__(self, ladder, group_id: str, **main_kwargs) -> None:
+        from app.messaging.dlq_writer import DlqWriter
+        from app.messaging.retry_tier import RetryTierConsumer
+
+        self.ladder = ladder
+        self.group_id = group_id
+        self.writer_group = f"{group_id}-dlq"
+        main_kwargs.setdefault("config_overrides", FAST_GROUP)
+        self.main = RunningConsumer(ladder=ladder, group_id=group_id, **main_kwargs)
+        self.tiers = [
+            RunningLoop(
+                RetryTierConsumer(
+                    topic,
+                    ladder=ladder,
+                    group_id=f"{group_id}-retry{index}",
+                    config_overrides=FAST_GROUP,
+                )
+            )
+            for index, topic in enumerate(ladder.retries)
+        ]
+        self.writer = RunningLoop(
+            DlqWriter(ladder=ladder, group_id=self.writer_group, config_overrides=FAST_GROUP)
+        )
+
+    @property
+    def all(self) -> list[RunningLoop]:
+        return [self.main, *self.tiers, self.writer]
+
+    def close(self) -> None:
+        for running in self.all:
+            running.stop.set()
+        for running in self.all:
+            running.close()
+
+
+@pytest.fixture
+def pipeline():
+    """pipeline(ladder, group_id, **main_consumer_kwargs). Stopped at teardown."""
+    started: list[Pipeline] = []
+
+    def start(ladder, group_id: str, **kwargs) -> Pipeline:
+        running = Pipeline(ladder, group_id, **kwargs)
+        started.append(running)
+        return running
+
+    yield start
+    for running in started:
+        _stop_all(running.all)
+
+
+def publish_raw(bootstrap: str, topic: str, messages) -> None:
+    """Publish (key, value, headers) tuples in order and wait for every ack."""
+    from confluent_kafka import Producer
+
+    producer = Producer(
+        {"bootstrap.servers": bootstrap, "acks": "all", "enable.idempotence": True}
+    )
+    for key, value, headers in messages:
+        producer.produce(
+            topic,
+            key=key.encode("utf-8") if isinstance(key, str) else key,
+            value=value,
+            headers=[(k, v.encode("utf-8")) for k, v in headers.items()],
+        )
+        producer.poll(0)
+    assert producer.flush(30) == 0, "broker did not acknowledge every message"
+
+
+def as_message(event) -> tuple[str, bytes, dict[str, str]]:
+    """An outbox-shaped event as (key, value, headers), via the relay's serialiser."""
+    from app.messaging.relay import _serialise
+
+    value, headers = _serialise(event)
+    return event.partition_key, value, headers
+
+
+def message_count(bootstrap: str, topic: str) -> int:
+    """Messages ever written to a fresh topic: the sum of high watermarks."""
+    from confluent_kafka import Consumer, TopicPartition
+
+    probe = Consumer({"bootstrap.servers": bootstrap, "group.id": f"probe-{uuid.uuid4().hex}"})
+    try:
+        partitions = probe.list_topics(topic, timeout=10).topics[topic].partitions
+        return sum(
+            probe.get_watermark_offsets(TopicPartition(topic, p), timeout=10)[1]
+            for p in partitions
+        )
+    finally:
+        probe.close()
+
+
+def dlq_rows(event_ids) -> list[dict]:
+    from sqlalchemy import text
+
+    from app.db.session import read_session
+
+    with read_session() as session:
+        return [
+            dict(row)
+            for row in session.execute(
+                text(
+                    "SELECT id, event_id::text AS event_id, original_topic, reason, attempts, "
+                    "first_failed_at, created_at, replayed_at, payload::text AS payload "
+                    "FROM dlq_messages WHERE event_id = ANY(CAST(:ids AS uuid[])) ORDER BY id"
+                ),
+                {"ids": list(event_ids)},
+            ).mappings()
+        ]
 
 
 def processed_count(group: str) -> int:

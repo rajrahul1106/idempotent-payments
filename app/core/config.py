@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     kafka_dlq_topic: str = "payments.dlq"
     kafka_partitions: int = 6
     kafka_consumer_group: str = "payments-ledger"
+    # Each tier consumer's group is "<kafka_consumer_group>-retry-<tier>".
+    kafka_dlq_writer_group: str = "payments-dlq-writer"
+
+    # How long a consumer waits before retrying a message the database could
+    # not take (decision D5, infrastructure errors). Doubles up to the max.
+    consumer_db_backoff_initial_ms: int = 500
+    consumer_db_backoff_max_ms: int = 10_000
 
     # Retry tiers, in seconds. Blueprint section 5.4.
     # NoDecode: read the env var as a plain string so the validator below

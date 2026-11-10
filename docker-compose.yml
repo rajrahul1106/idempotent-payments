@@ -95,11 +95,57 @@ services:
         condition: service_healthy
       topics:
         condition: service_completed_successfully
-    # Phase 5 stops on a message it cannot process; the restart retries it.
-    # Phase 6 replaces that loop with the retry topics and the DLQ.
+    # A failed message goes to a retry tier or the DLQ and the consumer moves
+    # on (decision D5). It exits only on a fatal broker error.
     restart: unless-stopped
 
-  # The retry-tier consumers arrive in Phase 6.
+  # One consumer per retry tier (blueprint §5.4). Each holds a message until
+  # its delay has passed, then returns it to payments.main. They never touch
+  # the database. Delays come from RETRY_TIER_SECONDS (default 5,60,600).
+
+  retry-5s:
+    build: .
+    command: python -m app.messaging.retry_tier 0
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+    depends_on:
+      topics:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  retry-1m:
+    build: .
+    command: python -m app.messaging.retry_tier 1
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+    depends_on:
+      topics:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  retry-10m:
+    build: .
+    command: python -m app.messaging.retry_tier 2
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+    depends_on:
+      topics:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Persists every payments.dlq message to dlq_messages, once.
+  dlq-writer:
+    build: .
+    command: python -m app.messaging.dlq_writer
+    environment:
+      DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      topics:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
   prometheus:
     image: prom/prometheus:v2.54.1

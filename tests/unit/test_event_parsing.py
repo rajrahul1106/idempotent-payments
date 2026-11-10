@@ -88,3 +88,20 @@ def test_malformed_body_is_an_error(raw):
 def test_unknown_event_type_is_an_error():
     with pytest.raises(EventError, match="event_type"):
         _parse(_payload(event_type="payment.reversed"))
+
+
+def test_event_id_header_must_be_a_uuid():
+    with pytest.raises(EventError, match="not a UUID"):
+        _parse(_payload(event_id="evt-1"), headers=_headers(event_id="evt-1"))
+
+
+@pytest.mark.parametrize("amount", [0, -150000, 10**12 + 1])
+def test_amount_out_of_range_is_an_error(amount):
+    with pytest.raises(EventError, match="out of range"):
+        _parse(_payload(amount_minor=amount))
+
+
+@pytest.mark.parametrize("currency", ["inr", "RUPEE", "", "IN"])
+def test_currency_must_be_an_iso_code(currency):
+    with pytest.raises(EventError, match="currency"):
+        _parse(_payload(currency=currency))

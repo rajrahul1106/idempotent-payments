@@ -36,6 +36,11 @@ print(",".join(web))
         "app.messaging.consumer",
         "app.messaging.topic_setup",
         "app.services.payment_events",
+        "app.messaging.retry_tier",
+        "app.messaging.dlq_writer",
+        "app.messaging.failures",
+        "app.services.dlq",
+        "app.db.errors",
         "app.core.exceptions",
     ],
 )

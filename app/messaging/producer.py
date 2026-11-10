@@ -40,7 +40,7 @@ class Producer(Protocol):
     def publish(
         self,
         topic: str,
-        key: str,
+        key: str | bytes | None,
         value: bytes,
         headers: dict[str, str] | None = None,
     ) -> None:
@@ -59,7 +59,12 @@ class Producer(Protocol):
 class KafkaProducer:
     """Production implementation, backed by confluent-kafka (librdkafka)."""
 
-    def __init__(self, bootstrap_servers: str | None = None) -> None:
+    def __init__(
+        self,
+        bootstrap_servers: str | None = None,
+        *,
+        client_id: str = "payments-outbox-relay",
+    ) -> None:
         # Imported lazily so that unit tests and the API process do not
         # need the native library present.
         from confluent_kafka import Producer as ConfluentProducer
@@ -77,14 +82,15 @@ class KafkaProducer:
             # level and latency matters more than compression here.
             "linger.ms": 5,
             "compression.type": "lz4",
-            "client.id": "payments-outbox-relay",
+            "client.id": client_id,
         }
         self._producer = ConfluentProducer(self._config)
+        self._closed = False
 
     def publish(
         self,
         topic: str,
-        key: str,
+        key: str | bytes | None,
         value: bytes,
         headers: dict[str, str] | None = None,
     ) -> None:
@@ -99,7 +105,8 @@ class KafkaProducer:
         try:
             self._producer.produce(
                 topic=topic,
-                key=key.encode("utf-8"),
+                # The retry path forwards the original key bytes unchanged.
+                key=key.encode("utf-8") if isinstance(key, str) else key,
                 value=value,
                 headers=[(k, v.encode("utf-8")) for k, v in (headers or {}).items()],
                 on_delivery=_on_delivery,
@@ -125,7 +132,18 @@ class KafkaProducer:
         return self._producer.flush(timeout_seconds)
 
     def close(self) -> None:
-        self._producer.flush(10.0)
+        """Flush what is queued, then release the broker connections.
+
+        Idempotent: a second call does nothing. The producer cannot publish
+        after this.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        remaining = self._producer.flush(10.0)
+        if remaining:
+            logger.warning("%d message(s) unacknowledged when the producer closed", remaining)
+        self._producer.close()
 
 
 def build_producer() -> Producer:
