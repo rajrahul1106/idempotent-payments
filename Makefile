@@ -1,10 +1,10 @@
-.PHONY: help up down logs migrate downgrade seed test test-fast test-unit test-integration test-messaging load chaos fmt check
+.PHONY: help up down logs topics migrate downgrade seed test test-fast test-unit test-integration test-messaging load chaos fmt check
 
 # The test suite never reads DATABASE_URL. It points the app at
 # TEST_DATABASE_URL and refuses any database whose name does not end in
 # _test, so no test can touch the database `make up` serves. The default is
 # a separate database on the same server; the suite creates it if missing.
-TEST_DATABASE_URL ?= postgresql+psycopg://payments:payments@localhost:5432/payments_test
+TEST_DATABASE_URL ?= postgresql+psycopg://payments:payments@localhost:5433/payments_test
 export TEST_DATABASE_URL
 
 help:
@@ -20,7 +20,10 @@ down:  ## Stop the stack and drop volumes
 	docker compose down -v
 
 logs:  ## Tail logs for app services
-	docker compose logs -f api relay
+	docker compose logs -f api relay consumer
+
+topics:  ## Create Kafka topics (idempotent; also runs as a Compose service)
+	PYTHONPATH=. python -m app.messaging.topic_setup
 
 migrate:  ## Apply all migrations
 	alembic upgrade head

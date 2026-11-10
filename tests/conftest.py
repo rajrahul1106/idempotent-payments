@@ -7,7 +7,8 @@ The suite never touches the database `make up` serves. It reads
 TEST_DATABASE_URL, refuses any database whose name does not end in
 `_test`, and points the application at it before any app module loads.
 Tests marked integration or messaging FAIL, never skip, when that database
-is missing or unreachable: a green run has to mean the gates ran.
+is missing or unreachable, and messaging tests fail the same way when Kafka
+is: a green run has to mean the gates ran.
 """
 
 from __future__ import annotations
@@ -127,12 +128,33 @@ def database() -> str:
     return _TEST_DATABASE_URL
 
 
+@pytest.fixture(scope="session")
+def kafka() -> str:
+    """A reachable broker, or a failure. Never a skip.
+
+    Messaging tests create their own topics with unique names, so they
+    never read or write the topics `make up` uses.
+    """
+    from confluent_kafka.admin import AdminClient
+
+    from app.core.config import settings
+
+    bootstrap = settings.kafka_bootstrap_servers
+    try:
+        AdminClient({"bootstrap.servers": bootstrap}).list_topics(timeout=5)
+    except Exception as exc:
+        pytest.fail(f"Kafka at {bootstrap} is not reachable: {exc}", pytrace=False)
+    return bootstrap
+
+
 @pytest.fixture(autouse=True)
 def _require_db(request):
-    """Database tests fail, never skip, when the test database is unusable."""
+    """Database and broker tests fail, never skip, when either is unusable."""
     node = request.node
     if node.get_closest_marker("integration") or node.get_closest_marker("messaging"):
         request.getfixturevalue("database")
+    if node.get_closest_marker("messaging"):
+        request.getfixturevalue("kafka")
 
 
 @pytest.fixture(scope="session")

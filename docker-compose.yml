@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: payments
       POSTGRES_DB: payments
     ports:
-      - "5432:5432"
+      - "5433:5432"  # host 5433, because 5432 belongs to another project
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -30,6 +30,9 @@ services:
       - --check=false
       - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:19092
       - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:19092
+      # Topics come only from topic_setup, with the partition count the
+      # system relies on. Auto-create once made payments.main with 1 partition.
+      - --set redpanda.auto_create_topics_enabled=false
     ports:
       - "19092:19092"
       - "9644:9644"
@@ -64,12 +67,39 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redpanda:
-        condition: service_healthy
+      topics:
+        condition: service_completed_successfully
     restart: unless-stopped
 
-  # The main consumer arrives in Phase 5 and the retry tiers in Phase 6.
-  # Their services are added by those phases, once the modules exist.
+  # One-shot: creates payments.main (6 partitions), the retry tiers and the
+  # DLQ topic. Idempotent; exits non-zero if a topic has the wrong
+  # partition count, which stops the relay and consumer from starting.
+  topics:
+    build: .
+    command: python -m app.messaging.topic_setup
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: "no"
+
+  consumer:
+    build: .
+    command: python -m app.messaging.consumer
+    environment:
+      DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      topics:
+        condition: service_completed_successfully
+    # Phase 5 stops on a message it cannot process; the restart retries it.
+    # Phase 6 replaces that loop with the retry topics and the DLQ.
+    restart: unless-stopped
+
+  # The retry-tier consumers arrive in Phase 6.
 
   prometheus:
     image: prom/prometheus:v2.54.1

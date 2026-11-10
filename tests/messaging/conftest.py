@@ -169,3 +169,192 @@ def make_outbox_rows(clear_outbox):
         return event_ids
 
     return _make
+
+
+# --- Phase 5: real Redpanda -----------------------------------------------
+#
+# Every test gets its own topic and consumer group, named with this run's
+# id, so no test can see another's messages and nothing touches the topics
+# `make up` uses. Topics are deleted again at teardown.
+
+import re  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+RUN_ID = uuid.uuid4().hex[:8]
+
+#: Short group timeouts, so a SIGKILLed consumer's partitions move in
+#: seconds rather than the default 45.
+FAST_GROUP = {"session.timeout.ms": 6000, "heartbeat.interval.ms": 1000}
+
+
+def wait_for(condition, timeout: float = 60.0, interval: float = 0.1) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(interval)
+    return bool(condition())
+
+
+@pytest.fixture
+def fresh_topic(kafka, request) -> str:
+    from confluent_kafka.admin import AdminClient
+
+    from app.messaging.topic_setup import ensure_topics
+
+    label = re.sub(r"[^A-Za-z0-9._-]", "-", request.node.name)[:60]
+    name = f"test.{RUN_ID}.{label}.{uuid.uuid4().hex[:6]}"
+    ensure_topics([name], partitions=6, bootstrap_servers=kafka)
+    yield name
+    delete_topics(kafka, [name])
+
+
+def delete_topics(bootstrap: str, names: list[str]) -> None:
+    """Delete test topics and wait for it. Warns instead of failing the test."""
+    import warnings
+
+    from confluent_kafka.admin import AdminClient
+
+    # Keep the client referenced until the futures resolve; a client that is
+    # garbage-collected first never finishes the request.
+    admin = AdminClient({"bootstrap.servers": bootstrap})
+    for name, future in admin.delete_topics(names, operation_timeout=30).items():
+        try:
+            future.result(timeout=30)
+        except Exception as exc:
+            warnings.warn(f"could not delete test topic {name}: {exc}", stacklevel=2)
+
+
+@pytest.fixture
+def group_id() -> str:
+    return f"test-{RUN_ID}-{uuid.uuid4().hex[:8]}"
+
+
+def payment_event(
+    from_account: str = "acc_src",
+    to_account: str = "acc_dst",
+    amount_minor: int = 1_000,
+    *,
+    traceparent: str | None = None,
+) -> SimpleNamespace:
+    """An outbox-shaped event, so the relay's own serialiser builds the message."""
+    event_id = str(uuid.uuid4())
+    return SimpleNamespace(
+        event_id=event_id,
+        event_type="payment.posted",
+        schema_version=1,
+        partition_key=from_account,
+        traceparent=traceparent,
+        payload={
+            "event_id": event_id,
+            "event_type": "payment.posted",
+            "schema_version": 1,
+            "transaction_id": f"pay_{uuid.uuid4().hex[:24]}",
+            "from_account_id": from_account,
+            "to_account_id": to_account,
+            "amount_minor": amount_minor,
+            "currency": "INR",
+            "reference": None,
+            "occurred_at": "2026-11-10T00:00:00+00:00",
+        },
+    )
+
+
+def publish(bootstrap: str, topic: str, events) -> None:
+    """Publish in order, keyed like the relay, and wait for every ack."""
+    from confluent_kafka import Producer
+
+    from app.messaging.relay import _serialise
+
+    producer = Producer(
+        {"bootstrap.servers": bootstrap, "acks": "all", "enable.idempotence": True}
+    )
+    for event in events:
+        value, headers = _serialise(event)
+        producer.produce(
+            topic,
+            key=event.partition_key.encode("utf-8"),
+            value=value,
+            headers=list(headers.items()),
+        )
+        producer.poll(0)
+    assert producer.flush(30) == 0, "broker did not acknowledge every message"
+
+
+class RunningConsumer:
+    """A real PaymentEventConsumer on a background thread."""
+
+    def __init__(self, **kwargs) -> None:
+        from app.messaging.consumer import PaymentEventConsumer
+
+        self.consumer = PaymentEventConsumer(config_overrides=FAST_GROUP, **kwargs)
+        self.stop = threading.Event()
+        self.error: BaseException | None = None
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self) -> None:
+        try:
+            self.consumer.run(self.stop)
+        except BaseException as exc:  # surfaced by close()
+            self.error = exc
+
+    @property
+    def stats(self):
+        return self.consumer.stats
+
+    def close(self) -> None:
+        self.stop.set()
+        self.thread.join(timeout=30)
+        assert not self.thread.is_alive(), "consumer did not stop"
+        assert self.error is None, f"consumer failed: {self.error!r}"
+
+
+@pytest.fixture
+def consumers():
+    """Start consumers with start(**kwargs); all are stopped at teardown."""
+    started: list[RunningConsumer] = []
+
+    def start(**kwargs) -> RunningConsumer:
+        running = RunningConsumer(**kwargs)
+        started.append(running)
+        return running
+
+    yield start
+    for running in started:
+        running.stop.set()
+    for running in started:
+        running.thread.join(timeout=30)
+
+
+def processed_count(group: str) -> int:
+    from sqlalchemy import text
+
+    from app.db.session import read_session
+
+    with read_session() as session:
+        return session.execute(
+            text("SELECT count(*) FROM processed_events WHERE consumer_group = :g"),
+            {"g": group},
+        ).scalar_one()
+
+
+def projected_event_ids(event_ids) -> list[str]:
+    """payment_events rows for these events, in the order they were written."""
+    from sqlalchemy import text
+
+    from app.db.session import read_session
+
+    with read_session() as session:
+        return [
+            str(row)
+            for row in session.execute(
+                text(
+                    "SELECT event_id FROM payment_events "
+                    "WHERE event_id = ANY(CAST(:ids AS uuid[])) ORDER BY id"
+                ),
+                {"ids": list(event_ids)},
+            ).scalars()
+        ]

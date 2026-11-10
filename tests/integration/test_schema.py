@@ -205,7 +205,10 @@ def test_unbalanced_transaction_cannot_commit(make_account, legs):
 
 
 def test_balanced_transaction_commits_and_postings_are_append_only(make_account):
-    payer, payee = make_account(0), make_account(0)
+    # Fund the payer first. This test writes postings directly, past the
+    # API's balance check, and must not leave a negative customer balance
+    # behind (I4) in the shared test database.
+    payer, payee = make_account(10_000), make_account(0)
     tx = _tx_id()
     with engine.begin() as conn:
         conn.execute(INSERT_TRANSACTION, {"id": tx, "amount": Decimal("100")})

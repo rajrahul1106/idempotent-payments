@@ -33,6 +33,9 @@ print(",".join(web))
         "app.services.payment",
         "app.services.idempotency",
         "app.messaging.relay",
+        "app.messaging.consumer",
+        "app.messaging.topic_setup",
+        "app.services.payment_events",
         "app.core.exceptions",
     ],
 )

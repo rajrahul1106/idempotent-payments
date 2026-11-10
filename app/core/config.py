@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # --- database --------------------------------------------------------
-    database_url: str = "postgresql+psycopg://payments:payments@localhost:5432/payments"
+    database_url: str = "postgresql+psycopg://payments:payments@localhost:5433/payments"
     db_pool_size: int = 20
     db_max_overflow: int = 5
     db_statement_timeout_ms: int = 5_000
