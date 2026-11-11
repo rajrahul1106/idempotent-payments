@@ -255,14 +255,23 @@ services:
       prometheus:
         condition: service_healthy
 
-  # In-memory storage. Without a cap it grows with every span and was
+  # In-memory trace store. Uncapped, it grew with every span and was
   # OOM-killed during the Phase 7b load drill (12,000 payments, ~20 spans
-  # each). Exporting is off the request path, so payments carried on.
+  # each); capped at 20,000 traces it still restarted under load. Now:
+  #   MEMORY_MAX_TRACES  the store keeps the newest 5,000 traces (~100,000 spans)
+  #   GOMEMLIMIT         Go's soft limit: the collector frees memory before...
+  #   mem_limit          ...the hard limit, which also keeps it from starving
+  #                      the rest of the stack.
+  # Sampling stays at 100%; under load the oldest traces are evicted first.
+  # Exporting is off the request path, so a Jaeger restart never affects a
+  # payment.
   jaeger:
     image: jaegertracing/all-in-one:1.60
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
-      MEMORY_MAX_TRACES: "20000"
+      MEMORY_MAX_TRACES: "5000"
+      GOMEMLIMIT: "400MiB"
+    mem_limit: 512m
     restart: unless-stopped
     ports:
       - "16686:16686"

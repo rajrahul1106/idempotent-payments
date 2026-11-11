@@ -825,15 +825,20 @@ purpose.
 
 ## Findings from the drills
 
-1. **A hot account turns lock contention into HTTP 500.** Every payment in
+1. **A hot account turned lock contention into HTTP 500.** Every payment in
    the first lag drill credited one account; 128 requests waited past
-   `lock_timeout` (3 s) and got 500 `internal_error`. A lock timeout is a
-   retryable condition and would be better reported as 409 or 503 with
-   `Retry-After`. Not changed in Phase 7b.
+   `lock_timeout` (3 s) and got 500 `internal_error`. **Fixed after the
+   drills (D21):** an account lock timeout now returns 503 `service_busy`
+   with `Retry-After: 1`, and a retry with the same key is processed
+   normally. `sys_settlement` is such an account for every deposit and
+   withdrawal (BLUEPRINT.md §15).
 2. **Jaeger was OOM-killed** during the 12,000-payment run (in-memory
-   storage, no cap, no restart policy). Fixed in Compose:
-   `MEMORY_MAX_TRACES=20000` and `restart: unless-stopped`. Payments were
-   unaffected: span export is off the request path.
+   storage, no cap, no restart policy), and still restarted with a
+   20,000-trace cap. **Fixed after the drills:** `MEMORY_MAX_TRACES=5000`,
+   `GOMEMLIMIT=400MiB`, a 512 MB container limit and
+   `restart: unless-stopped`. A rerun of the 12,000-payment load peaked at
+   383 MiB with no restart. Payments were never affected: span export is
+   off the request path.
 3. **Redpanda stopped without a trace** at about 23:58 UTC. Root cause not
    determined. No alert covered it; `KafkaUnreachable` now does.
 4. **A restarted process's burst is invisible to `rate()`.** The relay

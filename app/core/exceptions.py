@@ -17,6 +17,8 @@ class DomainError(Exception):
 
     status_code: int = 400
     code: str = "invalid_request"
+    #: Extra response headers, e.g. Retry-After.
+    headers: dict[str, str] | None = None
 
     def __init__(self, message: str, *, code: str | None = None) -> None:
         super().__init__(message)
@@ -78,3 +80,18 @@ class DlqAlreadyReplayed(DomainError):
 class BrokerUnavailable(DomainError):
     status_code = 503
     code = "service_unavailable"
+
+
+class AccountBusy(DomainError):
+    """An account row lock was not granted within lock_timeout.
+
+    Not 409: request_in_progress means this same idempotency key is in
+    flight (D2), and this is a different request. Not 500: nothing is
+    broken, the account is busy. The transaction rolled back, idempotency
+    key reservation included, so retrying with the same key is processed
+    normally.
+    """
+
+    status_code = 503
+    code = "service_busy"
+    headers = {"Retry-After": "1"}

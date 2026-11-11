@@ -8,7 +8,9 @@ groups:
       - alert: PaymentSuccessRateLow
         # §11: success rate below 99% over 5 min. A refusal the API is right
         # to make (insufficient funds, a bad request) is a success here; only
-        # a server-side failure counts against it.
+        # a server-side failure counts against it. 503 service_busy (a busy
+        # account, D21) is not a failure either: the client retries it with
+        # the same key. A rising share of it shows on Payments overview.
         expr: |
           sum(rate(payments_total{status=~"internal_error|service_unavailable"}[5m]))
             / sum(rate(payments_total[5m])) > 0.01

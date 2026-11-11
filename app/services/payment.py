@@ -20,6 +20,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import (
+    AccountBusy,
     AccountNotActive,
     AccountNotFound,
     CurrencyMismatch,
@@ -223,9 +224,25 @@ def _post_payment(
 
     # Step 5: lock both accounts, always in ascending id order. This
     # ordering is the deadlock prevention for A->B against B->A.
-    locked = account_repo.lock_many(
-        session, [command.from_account_id, command.to_account_id]
-    )
+    try:
+        locked = account_repo.lock_many(
+            session, [command.from_account_id, command.to_account_id]
+        )
+    except OperationalError as exc:
+        if _sqlstate(exc) != LOCK_NOT_AVAILABLE:
+            raise
+        # The account is busy: other payments held its row lock for longer
+        # than lock_timeout. Raising rolls back this whole transaction, the
+        # idempotency key reservation with it, so the client can retry with
+        # the same key. A lock timeout on the KEY itself is D2's 409, above.
+        logger.info(
+            "account lock not granted within lock_timeout (%s -> %s); 503 service_busy",
+            command.from_account_id,
+            command.to_account_id,
+        )
+        raise AccountBusy(
+            "An account in this payment is busy; retry with the same Idempotency-Key"
+        ) from exc
     by_id = {account.id: account for account in locked}
 
     source = by_id.get(command.from_account_id)
