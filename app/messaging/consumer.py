@@ -47,6 +47,7 @@ from typing import Any
 
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
+from app.core import metrics
 from app.core.config import settings
 from app.core.money import MAX_AMOUNT_MINOR
 from app.core.telemetry import (
@@ -62,6 +63,7 @@ from app.messaging.consumer_base import (
     BROKER_RETRY_SECONDS,
     ConsumerLoop,
     ProcessingError,
+    linger_before_exit,
 )
 from app.messaging.failures import (
     EventError,
@@ -285,6 +287,7 @@ class PaymentEventConsumer(ConsumerLoop):
             if kind is FailureKind.INFRASTRUCTURE:
                 span.set_attribute("outcome", "held_for_database")
                 self.stats.held_for_database += 1
+                metrics.EVENTS_PROCESSED.labels(topic=message.topic(), outcome="held").inc()
                 self._hold_for_database(message, exc)
                 return False
             return self._forward(message, headers, kind, exc, attempts, span)
@@ -296,6 +299,9 @@ class PaymentEventConsumer(ConsumerLoop):
         self._commit(message)
 
         span.set_attribute("outcome", "applied" if applied else "skipped")
+        metrics.EVENTS_PROCESSED.labels(
+            topic=message.topic(), outcome="applied" if applied else "skipped"
+        ).inc()
         if applied:
             self.stats.applied += 1
         else:
@@ -353,12 +359,16 @@ class PaymentEventConsumer(ConsumerLoop):
                 publish_error,
             )
             span.set_attribute("outcome", "held_for_broker")
+            metrics.EVENTS_PROCESSED.labels(topic=message.topic(), outcome="held").inc()
             self._hold_for(message, BROKER_RETRY_SECONDS)
             return False
 
         if self._after_forward is not None:
             self._after_forward(message, target)
         self._commit(message)
+        metrics.EVENTS_PROCESSED.labels(
+            topic=message.topic(), outcome="dead_lettered" if to_dlq else "retried"
+        ).inc()
         if to_dlq:
             self.stats.dead_lettered += 1
         else:
@@ -381,10 +391,12 @@ def main() -> int:
     signal.signal(signal.SIGINT, _handle_signal)
 
     setup_tracing("consumer")
+    metrics.start_metrics_server("consumer")
     try:
         PaymentEventConsumer().run(stop)
     except ProcessingError:
         logger.exception("consumer cannot continue")
+        linger_before_exit(stop)
         return 1
     finally:
         shutdown_tracing()

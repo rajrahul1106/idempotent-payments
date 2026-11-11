@@ -30,6 +30,7 @@ from typing import Any
 
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
+from app.core import metrics
 from app.core.config import settings
 from app.core.telemetry import (
     context_from,
@@ -39,7 +40,12 @@ from app.core.telemetry import (
     tracer,
 )
 from app.messaging import topics
-from app.messaging.consumer_base import BROKER_RETRY_SECONDS, ConsumerLoop, ProcessingError
+from app.messaging.consumer_base import (
+    BROKER_RETRY_SECONDS,
+    ConsumerLoop,
+    ProcessingError,
+    linger_before_exit,
+)
 from app.messaging.consumer import decode_headers
 from app.messaging.failures import attempt_count
 from app.messaging.producer import KafkaProducer, Producer, PublishError
@@ -158,6 +164,7 @@ class RetryTierConsumer(ConsumerLoop):
         if self._after_forward is not None:
             self._after_forward(message)
         self._commit(message)
+        metrics.EVENTS_PROCESSED.labels(topic=self.topic, outcome="forwarded").inc()
         event_id = headers.get(topics.HEADER_EVENT_ID, "")
         self.stats.forwarded += 1
         self.stats.forwarded_event_ids.append(event_id)
@@ -201,10 +208,12 @@ def main(argv: list[str] | None = None) -> int:
     topic = _tier_topic(args[0])
     # One service per tier: retry-5s, retry-1m, retry-10m.
     setup_tracing(f"retry-{topic.rsplit('.', 1)[-1]}")
+    metrics.start_metrics_server("retry-tier")
     try:
         RetryTierConsumer(topic).run(stop)
     except ProcessingError:
         logger.exception("retry tier cannot continue")
+        linger_before_exit(stop)
         return 1
     finally:
         shutdown_tracing()

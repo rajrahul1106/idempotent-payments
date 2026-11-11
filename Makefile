@@ -1,4 +1,4 @@
-.PHONY: help up down logs topics migrate downgrade seed test test-fast test-unit test-integration test-messaging load chaos fmt check
+.PHONY: help up down logs topics migrate downgrade seed test test-fast test-unit test-integration test-messaging load chaos fmt check rules
 
 # The test suite never reads DATABASE_URL. It points the app at
 # TEST_DATABASE_URL and refuses any database whose name does not end in
@@ -56,3 +56,9 @@ chaos:  ## Failure injection run
 
 check:  ## Static checks, including the no-float-money rule
 	PYTHONPATH=. python scripts/check_no_float_money.py
+
+PROMTOOL = docker run --rm -v "$(CURDIR)/monitoring/prometheus:/p" --entrypoint promtool prom/prometheus:v2.54.1
+
+rules:  ## Validate the alert rules and run their unit tests (promtool, via Docker)
+	$(PROMTOOL) check rules /p/alerts.yml
+	$(PROMTOOL) test rules /p/alerts_test.yml

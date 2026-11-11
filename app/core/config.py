@@ -64,6 +64,15 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
     otel_export_timeout_seconds: int = 5
 
+    # --- metrics (Phase 7b) -----------------------------------------------
+    # Every process but the API serves /metrics here; the API on its own port.
+    metrics_port: int = 9100
+    # Seconds a worker keeps /metrics up after a fatal error before exiting,
+    # so the failure and the restart are scraped (crash-loop alert).
+    fatal_exit_linger_seconds: int = 12
+    # How often the reconciliation process refreshes outbox and lag gauges.
+    pipeline_gauges_interval_seconds: int = 10
+
     # --- reconciliation (Phase 7a) ----------------------------------------
     reconciliation_interval_seconds: int = 300
     # I3: an unpublished outbox row older than this is a warning.

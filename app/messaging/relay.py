@@ -27,8 +27,10 @@ ordering.
 
 Exactly one relay instance runs (blueprint decision D1), and the database
 enforces it: run_forever publishes only while it holds a Postgres advisory
-lock. A second relay logs that the lock is taken and waits, and takes over
-only when the first one's connection closes. The relay holds the claimed
+lock, taken on a dedicated connection outside the pool and confirmed with
+the server before every batch. A second relay logs that the lock is taken
+and waits. It takes over when the first one unlocks on stop, or when the
+first one's lock connection dies. The relay holds the claimed
 outbox rows' locks while it publishes. Those locks never block
 a payment, which only inserts new outbox rows, and each publish is bounded
 by the producer's 10-second flush.
@@ -36,18 +38,18 @@ by the producer's 10-second flush.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import signal
 import threading
 from dataclasses import dataclass, field
 
-from sqlalchemy import text
-from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
+from app.core import metrics
 from app.core.config import settings
 from app.core.telemetry import (
     context_from,
@@ -173,6 +175,9 @@ def publish_batch(
 
         acknowledged.append(event.id)
         result.event_ids.append(event.event_id)
+        if event.created_at is not None:
+            delay = (dt.datetime.now(dt.timezone.utc) - event.created_at).total_seconds()
+            metrics.OUTBOX_PUBLISH_DELAY.observe(max(delay, 0.0))
 
     result.published = outbox_repo.mark_published(session, acknowledged)
 
@@ -196,35 +201,110 @@ def run_once(producer: Producer, *, limit: int | None = None) -> RelayResult:
 RELAY_LOCK_ID = 506_032_705
 LOCK_RETRY_SECONDS = 2.0
 
-_LOCK_HELD = text(
-    "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' "
-    "AND pid = pg_backend_pid() AND objid = :id AND granted"
-)
+#: application_name of the relay's two dedicated connections, so an operator
+#: (or a test) can find them in pg_stat_activity.
+LOCK_APPLICATION_NAME = "payments-relay-lock"
+LISTEN_APPLICATION_NAME = "payments-relay-listen"
 
 
-def _acquire_relay_lock(stop: threading.Event, retry_seconds: float) -> Connection | None:
-    """Block until this process holds the relay lock, or until told to stop.
+def _conninfo() -> str:
+    """libpq connection string for the relay's dedicated connections."""
+    return engine.url.set(drivername="postgresql").render_as_string(hide_password=False)
 
-    The lock is session-level, held by a dedicated autocommit connection
-    for as long as this relay publishes. Closing that connection, or the
-    process dying, releases it.
+
+class RelayLock:
+    """The D1 advisory lock, on a connection that never enters the pool.
+
+    A session-level advisory lock belongs to the connection that took it. A
+    pooled connection outlives its checkout, so a lock taken on one would
+    survive "closing" it and be silently inherited by the next code that
+    checked that connection out, in the same process. This connection is
+    opened for the lock alone, released with pg_advisory_unlock, and closed,
+    never returned anywhere.
     """
+
+    def __init__(self, conninfo: str | None = None) -> None:
+        self._conninfo = conninfo or _conninfo()
+        self._conn = None
+        self.backend_pid: int | None = None
+
+    def try_acquire(self) -> bool:
+        import psycopg
+
+        conn = psycopg.connect(
+            self._conninfo,
+            autocommit=True,
+            connect_timeout=5,
+            application_name=LOCK_APPLICATION_NAME,
+        )
+        try:
+            acquired = conn.execute(
+                "SELECT pg_try_advisory_lock(%s)", (RELAY_LOCK_ID,)
+            ).fetchone()[0]
+        except Exception:
+            conn.close()
+            raise
+        if not acquired:
+            conn.close()
+            return False
+        self._conn = conn
+        self.backend_pid = conn.info.backend_pid
+        return True
+
+    def held(self) -> bool:
+        """Ask the server, on the lock's own connection, whether it still holds
+        the lock. False if the connection is gone, for instance terminated."""
+        if self._conn is None or self._conn.closed:
+            return False
+        try:
+            return bool(
+                self._conn.execute(
+                    "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' "
+                    "AND objid = %s AND pid = pg_backend_pid() AND granted)",
+                    (RELAY_LOCK_ID,),
+                ).fetchone()[0]
+            )
+        except Exception as exc:
+            logger.error("relay lock connection failed: %s", exc)
+            return False
+
+    def release(self) -> None:
+        """pg_advisory_unlock, then close. Safe on a dead connection."""
+        conn, self._conn = self._conn, None
+        if conn is None:
+            return
+        try:
+            if not conn.closed:
+                conn.execute("SELECT pg_advisory_unlock(%s)", (RELAY_LOCK_ID,))
+                logger.info("relay lock %d released", RELAY_LOCK_ID)
+        except Exception as exc:
+            # The connection is already gone, and the server released the
+            # lock with it.
+            logger.warning("relay lock connection was already closed: %s", exc)
+        finally:
+            conn.close()
+            self.backend_pid = None
+
+
+def _acquire_relay_lock(stop: threading.Event, retry_seconds: float) -> RelayLock | None:
+    """Block until this process holds the relay lock, or until told to stop."""
     announced = False
     while not stop.is_set():
-        conn: Connection | None = None
+        metrics.heartbeat()
+        lock = RelayLock()
         try:
-            conn = engine.connect().execution_options(isolation_level="AUTOCOMMIT")
-            acquired = conn.execute(
-                text("SELECT pg_try_advisory_lock(:id)"), {"id": RELAY_LOCK_ID}
-            ).scalar_one()
+            acquired = lock.try_acquire()
         except Exception:
             logger.exception("relay could not reach the database to take its lock")
             acquired = False
         if acquired:
-            logger.info("relay lock %d acquired; this relay publishes", RELAY_LOCK_ID)
-            return conn
-        if conn is not None:
-            conn.close()
+            logger.info(
+                "relay lock %d acquired (backend pid %s); this relay publishes",
+                RELAY_LOCK_ID,
+                lock.backend_pid,
+            )
+            metrics.RELAY_LOCK_HELD.set(1)
+            return lock
         if not announced:
             logger.warning(
                 "another relay holds the relay lock %d; waiting, not publishing",
@@ -233,14 +313,6 @@ def _acquire_relay_lock(stop: threading.Event, retry_seconds: float) -> Connecti
             announced = True
         stop.wait(retry_seconds)
     return None
-
-
-def _still_holds(lock: Connection) -> bool:
-    try:
-        return bool(lock.execute(_LOCK_HELD, {"id": RELAY_LOCK_ID}).scalar_one())
-    except Exception:
-        logger.exception("relay lock connection failed")
-        return False
 
 
 class OutboxListener:
@@ -256,16 +328,19 @@ class OutboxListener:
     """
 
     def __init__(self, conninfo: str | None = None) -> None:
-        self._conninfo = conninfo or engine.url.set(drivername="postgresql").render_as_string(
-            hide_password=False
-        )
+        self._conninfo = conninfo or _conninfo()
         self._conn = None
         self.notifications = 0
 
     def _connect(self):
         import psycopg
 
-        conn = psycopg.connect(self._conninfo, autocommit=True, connect_timeout=5)
+        conn = psycopg.connect(
+            self._conninfo,
+            autocommit=True,
+            connect_timeout=5,
+            application_name=LISTEN_APPLICATION_NAME,
+        )
         conn.execute(f"LISTEN {outbox_repo.NOTIFY_CHANNEL}")
         logger.info("relay listening on channel %r", outbox_repo.NOTIFY_CHANNEL)
         return conn
@@ -297,7 +372,7 @@ class OutboxListener:
 
 
 def _publish_while_locked(
-    lock: Connection,
+    lock: RelayLock,
     producer: Producer,
     stop: threading.Event,
     *,
@@ -313,10 +388,15 @@ def _publish_while_locked(
             stop.wait(seconds)
 
     while not stop.is_set():
-        if not _still_holds(lock):
-            # The lock went with its connection, so another relay may now
-            # hold it. Stop publishing before anything else happens.
-            logger.error("relay lost lock %d; stopped publishing", RELAY_LOCK_ID)
+        metrics.heartbeat()
+        # Confirmed with the server before every batch, never from a local
+        # flag. If the lock's connection was terminated, another relay may
+        # already hold the lock: stop here, before claiming anything.
+        if not lock.held():
+            logger.error(
+                "relay lost lock %d; stopped publishing, waiting to reacquire",
+                RELAY_LOCK_ID,
+            )
             return
         try:
             result = run_once(producer)
@@ -384,7 +464,8 @@ def run_forever(
                     lock, producer, stop, interval=interval, listener=listener
                 )
             finally:
-                lock.close()  # releases the advisory lock
+                lock.release()
+                metrics.RELAY_LOCK_HELD.set(0)
     finally:
         if listener is not None:
             listener.close()
@@ -408,6 +489,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, _handle)
 
     setup_tracing("relay")
+    metrics.start_metrics_server("relay")
     try:
         run_forever(stop=stop)
     finally:

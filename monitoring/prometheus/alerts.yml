@@ -1,0 +1,162 @@
+# Alert rules. Thresholds from BLUEPRINT.md §11; each alert names the
+# RUNBOOK.md scenario that handles it. No Alertmanager: these show at
+# http://localhost:9090/alerts. Unit tests: alerts_test.yml (make rules).
+
+groups:
+  - name: payments
+    rules:
+      - alert: PaymentSuccessRateLow
+        # §11: success rate below 99% over 5 min. A refusal the API is right
+        # to make (insufficient funds, a bad request) is a success here; only
+        # a server-side failure counts against it.
+        expr: |
+          sum(rate(payments_total{status=~"internal_error|service_unavailable"}[5m]))
+            / sum(rate(payments_total[5m])) > 0.01
+        for: 1m
+        labels: {severity: page}
+        annotations:
+          summary: "More than 1% of payments failed server-side over 5 minutes"
+          runbook: "RUNBOOK.md#6-database-connection-exhaustion"
+
+      - alert: PaymentLatencyP99High
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le) (rate(payment_duration_seconds_bucket{endpoint="/v1/payments"}[5m]))) > 0.5
+        for: 2m
+        labels: {severity: ticket}
+        annotations:
+          summary: "POST /v1/payments p99 above 500 ms"
+          runbook: "RUNBOOK.md#6-database-connection-exhaustion"
+
+      - alert: IdempotencyKeyMismatchRateHigh
+        # §11: a mismatch rate above 1% means a client bug (a key reused for a
+        # different request body).
+        expr: |
+          sum(rate(idempotency_replays_total{outcome="mismatch"}[5m]))
+            / sum(rate(payments_total[5m])) > 0.01
+        for: 2m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Over 1% of payments reuse an idempotency key with a different body"
+          runbook: "RUNBOOK.md#a-idempotency-key-reuse-by-a-client"
+
+  - name: pipeline
+    rules:
+      - alert: OutboxNotDraining
+        expr: outbox_unpublished_rows > 100
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $value }} outbox rows unpublished for 2 minutes"
+          runbook: "RUNBOOK.md#3-outbox-not-draining"
+
+      - alert: OutboxPublishDelayHigh
+        # From Postgres (published_at - created_at), computed by the
+        # reconciliation job. The relay's own histogram is blind to the case
+        # that matters most: a restarted relay drains its whole backlog before
+        # Prometheus first scrapes it, so rate() never sees those observations.
+        expr: outbox_publish_delay_recent_p95_seconds > 60
+        for: 1m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Outbox publish delay p95 above 60 s"
+          runbook: "RUNBOOK.md#3-outbox-not-draining"
+
+      - alert: ConsumerLagHigh
+        # Per group, all partitions. Retry tiers are excluded: a message
+        # waiting out its delay is depth, not lag (RetryTierDepthHigh).
+        expr: |
+          sum by (group, topic) (kafka_consumer_lag{topic!~".*\\.retry\\..*"}) > 10000
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $labels.group }} is {{ $value }} messages behind on {{ $labels.topic }}"
+          runbook: "RUNBOOK.md#2-consumer-lag-rising"
+
+      - alert: RetryTierDepthHigh
+        expr: retry_topic_depth > 1000
+        for: 1m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $value }} messages waiting in retry tier {{ $labels.tier }}"
+          runbook: "RUNBOOK.md#2-consumer-lag-rising"
+
+      - alert: EventsSkipRateHigh
+        # §11: a skip rate above 20% is unexpected; usually the relay is
+        # republishing.
+        expr: |
+          sum(rate(events_processed_total{outcome="skipped"}[5m]))
+            / sum(rate(events_processed_total{outcome=~"applied|skipped"}[5m])) > 0.2
+        for: 2m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Over 20% of consumed events were duplicates (skipped)"
+          runbook: "RUNBOOK.md#5-duplicate-skip-rate-spike"
+
+      - alert: DlqMessagesIncreasing
+        # §11: any increase triggers investigation.
+        expr: sum(increase(dlq_messages_total[10m])) > 0
+        labels: {severity: ticket}
+        annotations:
+          summary: "New dead letters were recorded in the last 10 minutes"
+          runbook: "RUNBOOK.md#1-dlq-depth-is-growing"
+
+      - alert: DlqWriterStuck
+        # The DLQ writer crash-loop signal. Computed by the reconciliation
+        # job from committed offsets, so it fires while the writer is dead,
+        # which is exactly when dlq_messages_total stops moving.
+        expr: sum(kafka_consumer_lag{group="payments-dlq-writer"}) > 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $value }} messages on payments.dlq not recorded for 2 minutes"
+          runbook: "RUNBOOK.md#7-dlq-writer-crash-looping"
+
+      - alert: KafkaUnreachable
+        # The broker is not scraped, so no `up` series covers it. The
+        # reconciliation job reads committed offsets every 10 s; when that
+        # has not succeeded for 60 s, lag is unknown and nothing is flowing.
+        expr: time() - pipeline_gauges_last_success_timestamp_seconds{source="kafka"} > 60
+        for: 1m
+        labels: {severity: page}
+        annotations:
+          summary: "The reconciliation job has not reached Kafka for over a minute"
+          runbook: "RUNBOOK.md#process-down"
+
+  - name: database
+    rules:
+      - alert: DbPoolSaturated
+        expr: |
+          max by (job) (db_pool_connections{state="in_use"} / on (job, instance) db_pool_capacity) > 0.8
+        for: 1m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $labels.job }} has over 80% of its database pool in use"
+          runbook: "RUNBOOK.md#6-database-connection-exhaustion"
+
+  - name: correctness
+    rules:
+      - alert: ReconciliationCheckFailed
+        # §11: any zero pages immediately.
+        expr: reconciliation_status == 0
+        labels: {severity: page}
+        annotations:
+          summary: "Invariant check {{ $labels.check_name }} failed"
+          runbook: "RUNBOOK.md#4-ledger-does-not-balance"
+
+  - name: processes
+    rules:
+      - alert: ProcessDown
+        expr: up == 0
+        for: 1m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $labels.job }} has not answered a scrape for 1 minute"
+          runbook: "RUNBOOK.md#process-down"
+
+      - alert: ProcessCrashLooping
+        expr: changes(process_start_time_seconds[10m]) > 3
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $labels.job }} restarted {{ $value }} times in 10 minutes"
+          runbook: "RUNBOOK.md#7-dlq-writer-crash-looping"

@@ -1,0 +1,307 @@
+# promtool test rules alerts_test.yml   (or: make rules)
+# Each alert fires on the series that should fire it, and stays quiet on the
+# near miss next to it.
+
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # --- outbox not draining: >100 for 2 minutes ---------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'outbox_unpublished_rows{job="reconciliation",instance="reconciliation:9100"}'
+        values: '50 150x6'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: OutboxNotDraining
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: OutboxNotDraining
+        exp_alerts:
+          - exp_labels: {severity: page, job: reconciliation, instance: "reconciliation:9100"}
+            exp_annotations:
+              summary: "150 outbox rows unpublished for 2 minutes"
+              runbook: "RUNBOOK.md#3-outbox-not-draining"
+
+  # --- consumer lag: >10,000 for 5 minutes; retry tiers excluded -----------------
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumer_lag{group="payments-ledger",topic="payments.main",partition="0"}'
+        values: '0 6000x10'
+      - series: 'kafka_consumer_lag{group="payments-ledger",topic="payments.main",partition="1"}'
+        values: '0 6000x10'
+      - series: 'kafka_consumer_lag{group="payments-ledger-retry-10m",topic="payments.retry.10m",partition="0"}'
+        values: '50000x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ConsumerLagHigh
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: ConsumerLagHigh
+        exp_alerts:
+          - exp_labels: {severity: page, group: payments-ledger, topic: payments.main}
+            exp_annotations:
+              summary: "payments-ledger is 12000 messages behind on payments.main"
+              runbook: "RUNBOOK.md#2-consumer-lag-rising"
+
+  # --- DLQ growth: any increase; a writer restart is not growth -------------------
+  - interval: 1m
+    input_series:
+      - series: 'dlq_messages_total{job="dlq-writer",reason="permanent"}'
+        values: '0 0 5 5 5'
+      - series: 'dlq_messages_total{job="dlq-writer",reason="transient"}'
+        values: '7 7 0 0 0'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DlqMessagesIncreasing
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: DlqMessagesIncreasing
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "New dead letters were recorded in the last 10 minutes"
+              runbook: "RUNBOOK.md#1-dlq-depth-is-growing"
+  - interval: 1m
+    input_series:
+      - series: 'dlq_messages_total{job="dlq-writer",reason="transient"}'
+        values: '7 7 0 0 0'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DlqMessagesIncreasing
+        exp_alerts: []
+
+  # --- DLQ writer stuck: lag on payments.dlq for 2 minutes ------------------------
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumer_lag{group="payments-dlq-writer",topic="payments.dlq",partition="3"}'
+        values: '0 1x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: DlqWriterStuck
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: DlqWriterStuck
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "1 messages on payments.dlq not recorded for 2 minutes"
+              runbook: "RUNBOOK.md#7-dlq-writer-crash-looping"
+
+  # --- reconciliation failure: pages at once; a warning does not ------------------
+  - interval: 1m
+    input_series:
+      - series: 'reconciliation_status{job="reconciliation",instance="reconciliation:9100",check_name="ledger_balances_to_zero"}'
+        values: '1 1 0'
+      - series: 'reconciliation_status{job="reconciliation",instance="reconciliation:9100",check_name="outbox_fully_published"}'
+        values: '0.5 0.5 0.5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ReconciliationCheckFailed
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: ReconciliationCheckFailed
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              job: reconciliation
+              instance: "reconciliation:9100"
+              check_name: ledger_balances_to_zero
+            exp_annotations:
+              summary: "Invariant check ledger_balances_to_zero failed"
+              runbook: "RUNBOOK.md#4-ledger-does-not-balance"
+
+  # --- crash loop: more than 3 restarts in 10 minutes -----------------------------
+  - interval: 1m
+    input_series:
+      - series: 'process_start_time_seconds{job="dlq-writer",instance="dlq-writer:9100"}'
+        values: '100 160 220 280 340 400'
+      - series: 'process_start_time_seconds{job="relay",instance="relay:9100"}'
+        values: '50x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ProcessCrashLooping
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ProcessCrashLooping
+        exp_alerts:
+          - exp_labels: {severity: page, job: dlq-writer, instance: "dlq-writer:9100"}
+            exp_annotations:
+              summary: "dlq-writer restarted 5 times in 10 minutes"
+              runbook: "RUNBOOK.md#7-dlq-writer-crash-looping"
+
+  # --- a process down for 1 minute ----------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'up{job="relay",instance="relay:9100"}'
+        values: '1 0 0 0'
+      - series: 'up{job="consumer",instance="consumer:9100"}'
+        values: '1 1 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ProcessDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: ProcessDown
+        exp_alerts:
+          - exp_labels: {severity: page, job: relay, instance: "relay:9100"}
+            exp_annotations:
+              summary: "relay has not answered a scrape for 1 minute"
+              runbook: "RUNBOOK.md#process-down"
+
+  # --- retry tier depth above 1,000 for 1 minute ------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'retry_topic_depth{job="reconciliation",instance="reconciliation:9100",tier="5s"}'
+        values: '0 1500x3'
+      - series: 'retry_topic_depth{job="reconciliation",instance="reconciliation:9100",tier="1m"}'
+        values: '900x3'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RetryTierDepthHigh
+        exp_alerts:
+          - exp_labels: {severity: page, job: reconciliation, instance: "reconciliation:9100", tier: "5s"}
+            exp_annotations:
+              summary: "1500 messages waiting in retry tier 5s"
+              runbook: "RUNBOOK.md#2-consumer-lag-rising"
+
+  # --- duplicate skip rate above 20% ------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'events_processed_total{job="consumer",topic="payments.main",outcome="applied"}'
+        values: '0+10x10'
+      - series: 'events_processed_total{job="consumer",topic="payments.main",outcome="skipped"}'
+        values: '0+10x10'
+      - series: 'events_processed_total{job="retry-5s",topic="payments.retry.5s",outcome="forwarded"}'
+        values: '0+1000x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: EventsSkipRateHigh
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "Over 20% of consumed events were duplicates (skipped)"
+              runbook: "RUNBOOK.md#5-duplicate-skip-rate-spike"
+
+  # --- payment success rate below 99% ---------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'payments_total{job="api",status="created",currency="INR"}'
+        values: '0+100x10'
+      - series: 'payments_total{job="api",status="insufficient_funds",currency="none"}'
+        values: '0+50x10'
+      - series: 'payments_total{job="api",status="internal_error",currency="none"}'
+        values: '0+5x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: PaymentSuccessRateLow
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "More than 1% of payments failed server-side over 5 minutes"
+              runbook: "RUNBOOK.md#6-database-connection-exhaustion"
+  - interval: 1m
+    input_series:  # refusals are not failures
+      - series: 'payments_total{job="api",status="created",currency="INR"}'
+        values: '0+100x10'
+      - series: 'payments_total{job="api",status="insufficient_funds",currency="none"}'
+        values: '0+50x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: PaymentSuccessRateLow
+        exp_alerts: []
+
+  # --- payment p99 above 500 ms ----------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'payment_duration_seconds_bucket{job="api",endpoint="/v1/payments",le="0.5"}'
+        values: '0+90x10'
+      - series: 'payment_duration_seconds_bucket{job="api",endpoint="/v1/payments",le="5"}'
+        values: '0+100x10'
+      - series: 'payment_duration_seconds_bucket{job="api",endpoint="/v1/payments",le="+Inf"}'
+        values: '0+100x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: PaymentLatencyP99High
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "POST /v1/payments p99 above 500 ms"
+              runbook: "RUNBOOK.md#6-database-connection-exhaustion"
+
+  # --- idempotency key mismatch above 1% --------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'payments_total{job="api",status="created",currency="INR"}'
+        values: '0+100x10'
+      - series: 'idempotency_replays_total{job="api",outcome="mismatch"}'
+        values: '0+5x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: IdempotencyKeyMismatchRateHigh
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "Over 1% of payments reuse an idempotency key with a different body"
+              runbook: "RUNBOOK.md#a-idempotency-key-reuse-by-a-client"
+
+  # --- outbox publish delay p95 above 60 s ------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'outbox_publish_delay_recent_p95_seconds{job="reconciliation",instance="reconciliation:9100"}'
+        values: '0.2 0.2 140 140 140 0.3'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: OutboxPublishDelayHigh
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: OutboxPublishDelayHigh
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: reconciliation, instance: "reconciliation:9100"}
+            exp_annotations:
+              summary: "Outbox publish delay p95 above 60 s"
+              runbook: "RUNBOOK.md#3-outbox-not-draining"
+
+  # --- database pool above 80% for 1 minute -----------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'db_pool_connections{job="api",instance="api:8000",state="in_use"}'
+        values: '5 25x4'
+      - series: 'db_pool_capacity{job="api",instance="api:8000"}'
+        values: '25x5'
+      - series: 'db_pool_connections{job="consumer",instance="consumer:9100",state="in_use"}'
+        values: '1x5'
+      - series: 'db_pool_capacity{job="consumer",instance="consumer:9100"}'
+        values: '25x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DbPoolSaturated
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: DbPoolSaturated
+        exp_alerts:
+          - exp_labels: {severity: page, job: api}
+            exp_annotations:
+              summary: "api has over 80% of its database pool in use"
+              runbook: "RUNBOOK.md#6-database-connection-exhaustion"
+
+  # --- Kafka unreachable: lag not refreshed for over a minute ------------------------
+  - interval: 1m
+    input_series:
+      - series: 'pipeline_gauges_last_success_timestamp_seconds{job="reconciliation",instance="reconciliation:9100",source="kafka"}'
+        values: '0 60 120 120 120 120'
+      - series: 'pipeline_gauges_last_success_timestamp_seconds{job="reconciliation",instance="reconciliation:9100",source="postgres"}'
+        values: '0 60 120 180 240 300'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: KafkaUnreachable
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KafkaUnreachable
+        exp_alerts:
+          - exp_labels: {severity: page, job: reconciliation, instance: "reconciliation:9100", source: kafka}
+            exp_annotations:
+              summary: "The reconciliation job has not reached Kafka for over a minute"
+              runbook: "RUNBOOK.md#process-down"

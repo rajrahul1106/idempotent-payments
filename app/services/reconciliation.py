@@ -18,7 +18,11 @@ All four run in one REPEATABLE READ, read-only transaction, so they see one
 snapshot of the database. Each result is then written to
 reconciliation_runs in its own short transaction.
 
-Run every 5 minutes with: python -m app.services.reconciliation
+The same process also keeps the pipeline gauges current (outbox depth and
+age, consumer lag, retry tier depth; see PipelineGauges), because they must
+stay visible while the relay or a consumer is down.
+
+Run with: python -m app.services.reconciliation
 """
 
 from __future__ import annotations
@@ -29,12 +33,14 @@ import logging
 import signal
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import text
 
+from app.core import metrics
 from app.core.config import settings
 from app.core.money import format_amount
 from app.core.telemetry import setup_tracing, shutdown_tracing, tracer
@@ -44,6 +50,8 @@ logger = logging.getLogger(__name__)
 _tracer = tracer(__name__)
 
 PASS, WARN, FAIL = "pass", "warn", "fail"
+#: reconciliation_status gauge values (§11: 1 pass, 0 fail).
+STATUS_VALUE = {PASS: 1.0, WARN: 0.5, FAIL: 0.0}
 
 
 @dataclass(frozen=True)
@@ -132,6 +140,9 @@ def run_checks(*, record: bool = True) -> Report:
         span.set_attribute("reconciliation.status", report.status)
         if record:
             _record(report)
+    for check in report.checks:
+        metrics.RECONCILIATION_STATUS.labels(check_name=check.name).set(STATUS_VALUE[check.status])
+    metrics.RECONCILIATION_LAST_RUN.set(time.time())
     level = {PASS: logging.INFO, WARN: logging.WARNING, FAIL: logging.ERROR}[report.status]
     logger.log(level, "reconciliation %s: %s", report.status, json.dumps(report.as_dict()["checks"]))
     return report
@@ -154,18 +165,94 @@ def _record(report: Report) -> None:
             )
 
 
+# --- pipeline gauges: metrics that must not die with what they watch -----------------
+
+
+class PipelineGauges:
+    """Outbox depth and age from Postgres; consumer lag and retry tier depth
+    from Kafka's committed offsets. Each source fails on its own: a broker
+    outage leaves the outbox gauges updating, and the other way round."""
+
+    def __init__(self) -> None:
+        self._lag_reader = None
+
+    def refresh(self) -> None:
+        self._refresh_outbox()
+        self._refresh_lag()
+
+    def _refresh_outbox(self) -> None:
+        from app.db.repositories import outbox as outbox_repo
+        from app.db.session import read_session
+
+        try:
+            with read_session() as session:
+                backlog = outbox_repo.backlog_size(session)
+                oldest = outbox_repo.oldest_unpublished_age_seconds(session)
+                recent_p95 = outbox_repo.recent_publish_delay_p95(session)
+        except Exception as exc:
+            logger.warning("outbox gauges not refreshed: %s", exc)
+            return
+        metrics.OUTBOX_UNPUBLISHED.set(backlog)
+        metrics.OUTBOX_OLDEST_AGE.set(oldest or 0)
+        metrics.OUTBOX_RECENT_DELAY_P95.set(recent_p95 or 0)
+        metrics.PIPELINE_GAUGES_LAST_SUCCESS.labels(source="postgres").set(time.time())
+
+    def _refresh_lag(self) -> None:
+        from app.messaging.lag import LagReader, watched_groups
+
+        try:
+            if self._lag_reader is None:
+                self._lag_reader = LagReader()
+            lags = self._lag_reader.read(watched_groups())
+        except Exception as exc:
+            logger.warning("consumer lag not refreshed: %s", exc)
+            self.close()
+            return
+        depth: dict[str, int] = {}
+        for lag in lags:
+            metrics.CONSUMER_LAG.labels(
+                topic=lag.topic, partition=str(lag.partition), group=lag.group
+            ).set(lag.lag)
+            if "retry" in lag.topic:
+                tier = lag.topic.rsplit(".", 1)[-1]
+                depth[tier] = depth.get(tier, 0) + lag.lag
+        for tier, value in depth.items():
+            metrics.RETRY_TOPIC_DEPTH.labels(tier=tier).set(value)
+        metrics.PIPELINE_GAUGES_LAST_SUCCESS.labels(source="kafka").set(time.time())
+
+    def close(self) -> None:
+        if self._lag_reader is not None:
+            self._lag_reader.close()
+            self._lag_reader = None
+
+
 # --- the scheduled job ---------------------------------------------------------------
 
 
-def run_every(interval_seconds: float, stop: threading.Event) -> None:
-    """Run now, then every interval, until stopped. A failed run is logged
-    and the schedule continues: one unreachable database must not end it."""
+def run_every(
+    interval_seconds: float,
+    stop: threading.Event,
+    *,
+    gauges: PipelineGauges | None = None,
+    gauge_interval_seconds: float | None = None,
+) -> None:
+    """Run the checks now and then every interval, until stopped. With
+    `gauges`, refresh them every gauge interval in between. A failed run is
+    logged and the schedule continues: one unreachable database must not
+    end it."""
+    tick = min(interval_seconds, gauge_interval_seconds or interval_seconds)
+    next_check = time.monotonic()
     while not stop.is_set():
-        try:
-            run_checks()
-        except Exception:
-            logger.exception("reconciliation run failed")
-        stop.wait(interval_seconds)
+        metrics.heartbeat()
+        if time.monotonic() >= next_check:
+            next_check = time.monotonic() + interval_seconds
+            try:
+                run_checks()
+            except Exception:
+                logger.exception("reconciliation run failed")
+        if gauges is not None:
+            gauges.refresh()
+        stop.wait(max(0.0, min(tick, next_check - time.monotonic())))
 
 
 def main() -> int:
@@ -182,10 +269,22 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
     setup_tracing("reconciliation")
-    logger.info("reconciliation every %ds", settings.reconciliation_interval_seconds)
+    metrics.start_metrics_server("reconciliation")
+    logger.info(
+        "reconciliation every %ds, pipeline gauges every %ds",
+        settings.reconciliation_interval_seconds,
+        settings.pipeline_gauges_interval_seconds,
+    )
+    gauges = PipelineGauges()
     try:
-        run_every(settings.reconciliation_interval_seconds, stop)
+        run_every(
+            settings.reconciliation_interval_seconds,
+            stop,
+            gauges=gauges,
+            gauge_interval_seconds=settings.pipeline_gauges_interval_seconds,
+        )
     finally:
+        gauges.close()
         shutdown_tracing()
     return 0
 

@@ -7,6 +7,7 @@ import uuid
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from fastapi.responses import JSONResponse
 from opentelemetry import trace
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -16,8 +17,10 @@ from app.api.deps import (
     rate_limit,
     require_role,
 )
-from app.core.exceptions import DomainError
+from app.core import metrics
+from app.core.exceptions import DomainError, IdempotencyKeyReuse
 from app.core.telemetry import current_traceparent, key_digest
+from app.db.errors import database_unavailable
 from app.db.models.ledger import Transaction
 from app.schemas.payments import PaymentRequest
 from app.services.payment import Actor, PaymentCommand, create_payment
@@ -39,6 +42,34 @@ def create(
     _: None = Depends(rate_limit),
     principal: Principal = Depends(require_role("client")),
 ) -> JSONResponse:
+    try:
+        result = _create(body, idempotency_key, traceparent, principal)
+    except DomainError as exc:
+        # Labels are bounded: a fixed set of error codes, and no currency for
+        # a refused request (its currency is whatever the caller sent).
+        metrics.PAYMENTS.labels(status=exc.code, currency="none").inc()
+        if isinstance(exc, IdempotencyKeyReuse):
+            metrics.IDEMPOTENCY_REPLAYS.labels(outcome="mismatch").inc()
+        raise
+    except Exception as exc:
+        unavailable = isinstance(exc, OperationalError) and database_unavailable(exc)
+        metrics.PAYMENTS.labels(
+            status="service_unavailable" if unavailable else "internal_error", currency="none"
+        ).inc()
+        raise
+    metrics.PAYMENTS.labels(
+        status="replayed" if result.replayed else "created", currency=body.currency
+    ).inc()
+    if result.replayed:
+        metrics.IDEMPOTENCY_REPLAYS.labels(outcome="replayed").inc()
+
+    headers = {"Idempotency-Replayed": "true"} if result.replayed else {}
+    return JSONResponse(
+        status_code=result.status_code, content=result.body, headers=headers
+    )
+
+
+def _create(body: PaymentRequest, idempotency_key, traceparent, principal: Principal):
     # A missing key is rejected rather than processed unprotected. Letting
     # it through would make retry safety optional, which is the whole point.
     if not idempotency_key:
@@ -73,11 +104,7 @@ def create(
     if result.body.get("event_id"):
         span.set_attribute("event_id", result.body["event_id"])
     span.set_attribute("payment.replayed", result.replayed)
-
-    headers = {"Idempotency-Replayed": "true"} if result.replayed else {}
-    return JSONResponse(
-        status_code=result.status_code, content=result.body, headers=headers
-    )
+    return result
 
 
 @router.get("/payments/{payment_id}")

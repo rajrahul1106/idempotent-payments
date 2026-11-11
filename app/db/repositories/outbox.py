@@ -93,3 +93,21 @@ def notify(session: Session, event_id: str) -> None:
         text("SELECT pg_notify(:channel, :event_id)"),
         {"channel": NOTIFY_CHANNEL, "event_id": event_id},
     )
+
+
+def recent_publish_delay_p95(session: Session, *, window_seconds: int = 300) -> float | None:
+    """p95 publish delay of rows published in the last `window_seconds`.
+
+    Seconds as a float: a duration, not money. The created_at bound keeps the
+    scan on ix_outbox_created; a row stuck longer than an hour is reported by
+    the oldest-unpublished-age gauge instead.
+    """
+    return session.execute(
+        text(
+            "SELECT percentile_cont(0.95) WITHIN GROUP "
+            "(ORDER BY extract(epoch FROM published_at - created_at)) FROM outbox "
+            "WHERE created_at > now() - interval '1 hour' "
+            "AND published_at > now() - make_interval(secs => :window)"
+        ),
+        {"window": window_seconds},
+    ).scalar_one()

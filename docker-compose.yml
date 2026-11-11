@@ -45,6 +45,12 @@ services:
   api:
     build: .
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.core.healthcheck", "--url", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     environment:
       DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
@@ -62,6 +68,12 @@ services:
   relay:
     build: .
     command: python -m app.messaging.relay
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.core.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     environment:
       DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
@@ -89,6 +101,12 @@ services:
   consumer:
     build: .
     command: python -m app.messaging.consumer
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.core.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     environment:
       DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
@@ -109,6 +127,12 @@ services:
   retry-5s:
     build: .
     command: python -m app.messaging.retry_tier 0
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.core.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     environment:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
@@ -120,6 +144,12 @@ services:
   retry-1m:
     build: .
     command: python -m app.messaging.retry_tier 1
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.core.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     environment:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
@@ -131,6 +161,12 @@ services:
   retry-10m:
     build: .
     command: python -m app.messaging.retry_tier 2
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.core.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     environment:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
@@ -143,6 +179,12 @@ services:
   dlq-writer:
     build: .
     command: python -m app.messaging.dlq_writer
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.core.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     environment:
       DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
@@ -155,24 +197,47 @@ services:
     restart: unless-stopped
 
   # The four invariant checks (I1 to I4) every RECONCILIATION_INTERVAL_SECONDS
-  # (default 300), each result written to reconciliation_runs.
+  # (default 300), each result written to reconciliation_runs. Also keeps the
+  # outbox and consumer-lag gauges current, so they survive the processes
+  # they watch.
   reconciliation:
     build: .
     command: python -m app.services.reconciliation
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.core.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     environment:
       DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     depends_on:
       postgres:
         condition: service_healthy
+      topics:
+        condition: service_completed_successfully
     restart: unless-stopped
 
+  # Scrapes every process (monitoring/prometheus/prometheus.yml) and
+  # evaluates monitoring/prometheus/alerts.yml. No Alertmanager: alerts show
+  # at http://localhost:9090/alerts.
   prometheus:
     image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
     volumes:
       - ./monitoring/prometheus:/etc/prometheus
     ports:
       - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
 
   grafana:
     image: grafana/grafana:11.2.0
@@ -184,13 +249,21 @@ services:
       - ./monitoring/grafana:/etc/grafana/provisioning
     ports:
       - "3000:3000"
+    # Datasources and dashboards are provisioned from monitoring/grafana; the
+    # order matters only so the first dashboard load finds Prometheus ready.
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_healthy
 
+  # In-memory storage. Without a cap it grows with every span and was
+  # OOM-killed during the Phase 7b load drill (12,000 payments, ~20 spans
+  # each). Exporting is off the request path, so payments carried on.
   jaeger:
     image: jaegertracing/all-in-one:1.60
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
+      MEMORY_MAX_TRACES: "20000"
+    restart: unless-stopped
     ports:
       - "16686:16686"
       - "4317:4317"

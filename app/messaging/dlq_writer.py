@@ -37,11 +37,12 @@ from typing import Any
 
 from opentelemetry.trace import SpanKind
 
+from app.core import metrics
 from app.core.config import settings
 from app.core.telemetry import context_from, setup_tracing, shutdown_tracing, tracer
 from app.messaging import topics
 from app.messaging.consumer import decode_headers
-from app.messaging.consumer_base import ConsumerLoop, ProcessingError
+from app.messaging.consumer_base import ConsumerLoop, ProcessingError, linger_before_exit
 from app.messaging.failures import FailureKind, attempt_count, classify, failure_history
 from app.services.dlq import (
     NIL_EVENT_ID,
@@ -106,6 +107,12 @@ def dead_letter_from(
         attempts=attempt_count(headers),
         first_failed_at=_parse_time(headers.get(topics.HEADER_FIRST_FAILED_AT)) or stamped,
     )
+
+
+def reason_kind(reason: str) -> str:
+    """The metric label for a reason: its kind, never the error text."""
+    kind = reason.split(":", 1)[0]
+    return kind if kind in ("permanent", "transient") else "unknown"
 
 
 @dataclass
@@ -176,6 +183,7 @@ class DlqWriter(ConsumerLoop):
             if classify(exc) is FailureKind.INFRASTRUCTURE:
                 self._last_outcome = "held_for_database"
                 self.stats.held_for_database += 1
+                metrics.EVENTS_PROCESSED.labels(topic=message.topic(), outcome="held").inc()
                 self._hold_for_database(message, exc)
                 return False
             logger.error(
@@ -189,7 +197,9 @@ class DlqWriter(ConsumerLoop):
         self._database_ok(message)
         self._commit(message)
         self._last_outcome = "written" if written else "skipped"
+        metrics.EVENTS_PROCESSED.labels(topic=message.topic(), outcome=self._last_outcome).inc()
         if written:
+            metrics.DLQ_MESSAGES.labels(reason=reason_kind(letter.reason)).inc()
             self.stats.written += 1
             logger.error(
                 "dead letter recorded: event %s from %s after %d attempt(s): %s",
@@ -222,10 +232,12 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
     setup_tracing("dlq-writer")
+    metrics.start_metrics_server("dlq-writer")
     try:
         DlqWriter().run(stop)
     except ProcessingError:
         logger.exception("DLQ writer cannot continue")
+        linger_before_exit(stop)
         return 1
     finally:
         shutdown_tracing()

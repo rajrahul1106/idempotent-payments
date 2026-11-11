@@ -1,0 +1,11 @@
+# Loads every *.json in this directory into the "Payments" folder.
+apiVersion: 1
+providers:
+  - name: payments
+    folder: Payments
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards

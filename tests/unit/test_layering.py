@@ -43,6 +43,9 @@ print(",".join(web))
         "app.db.errors",
         "app.core.telemetry",
         "app.services.reconciliation",
+        "app.core.metrics",
+        "app.core.healthcheck",
+        "app.messaging.lag",
         "app.core.exceptions",
     ],
 )

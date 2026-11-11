@@ -26,6 +26,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from app.core import metrics
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -191,6 +192,7 @@ class ConsumerLoop:
         logger.info("%s started: topic=%s group=%s", type(self).__name__, self.topic, self.group_id)
         try:
             while not stop.is_set():
+                metrics.heartbeat()
                 if max_messages is not None and self.finished >= max_messages:
                     break
                 self.holds.release_due(time.monotonic())
@@ -257,3 +259,16 @@ class ConsumerLoop:
     def _database_ok(self, message) -> None:
         if self._db_backoff.pop((message.topic(), message.partition()), None) is not None:
             logger.info("database reachable again at %s, resuming", self.where(message))
+
+
+def linger_before_exit(stop: threading.Event) -> None:
+    """After a fatal error, keep /metrics up briefly before exiting.
+
+    A worker that dies within a second of starting is never scraped, so a
+    crash loop would look like a target that is merely down. Lingering long
+    enough for a scrape makes each restart visible to
+    changes(process_start_time_seconds[10m]). SIGTERM still ends it at once.
+    """
+    seconds = settings.fatal_exit_linger_seconds
+    logger.error("exiting in %ds (kept up so this failure is scraped)", seconds)
+    stop.wait(seconds)
