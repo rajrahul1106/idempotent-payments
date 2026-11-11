@@ -96,8 +96,10 @@ step of each scenario.
 **Executed, unplanned: Redpanda stopped during scenario 7.** The broker
 stopped at about 23:58:14 with no log line and no exit record kept by Docker;
 its first restart (triggered by `docker compose start dlq-writer`) failed to
-bind its RPC port. Root cause not determined; the Docker VM has 4 GB and
-Jaeger had been OOM-killed earlier in the session. No alert covered a dead
+bind its RPC port. Later the same night it was caught being OOM-killed
+(exit 137, `oom=true`) with the Docker VM out of memory, which is very likely
+what happened here too; Redpanda now has a memory cap and a restart policy
+(Findings, item 3). No alert covered a dead
 broker, so `KafkaUnreachable` was added and proven on this outage:
 
 ```
@@ -839,8 +841,14 @@ purpose.
    `restart: unless-stopped`. A rerun of the 12,000-payment load peaked at
    383 MiB with no restart. Payments were never affected: span export is
    off the request path.
-3. **Redpanda stopped without a trace** at about 23:58 UTC. Root cause not
-   determined. No alert covered it; `KafkaUnreachable` now does.
+3. **Redpanda stopped without a trace** at about 23:58 UTC. No alert covered
+   it; `KafkaUnreachable` now does. **Cause found after the drills:** it was
+   OOM-killed again at 00:27:29 (exit 137, `oom=true`) while a load test ran,
+   and again 20 s after a restart: the 4 GB Docker VM was out of memory with
+   swap exhausted. The earlier stop was very likely the same; that restart
+   attempt erased the OOM flag. The two statement-timeout 500s of that load
+   test happened at the same instant. **Fixed (D22):** `--memory 512M`, a
+   768 MB container limit and `restart: unless-stopped`.
 4. **A restarted process's burst is invisible to `rate()`.** The relay
    drained 600 rows before its first scrape. Alerts that matter after a
    restart are computed from durable state by the reconciliation job.

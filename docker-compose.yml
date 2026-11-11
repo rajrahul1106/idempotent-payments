@@ -19,12 +19,24 @@ services:
 
   # Redpanda is Kafka-protocol compatible and runs as a single container
   # with no ZooKeeper or KRaft setup. Blueprint section 6.
+  #
+  # Memory: with --memory 1G and no limit it was OOM-killed twice when the
+  # 4 GB Docker VM ran out under load, and with no restart policy it stayed
+  # down. Seastar now gets 512M; mem_limit sits a little above it (768m) so
+  # the container limit never kills the broker before Seastar's own
+  # allocator has had a chance to work. unless-stopped: a crash or an OOM
+  # restarts it, a manual `docker stop` (the chaos tests) keeps it down.
+  # Its data volume survives a restart, and every client reconnects.
   redpanda:
     image: redpandadata/redpanda:v24.2.7
+    mem_limit: 768m
+    restart: unless-stopped
     command:
       - redpanda start
       - --smp 1
-      - --memory 1G
+      - --memory 512M
+      # Nothing held back for the OS: mem_limit, not Seastar, is the ceiling.
+      - --reserve-memory 0M
       - --overprovisioned
       - --node-id 0
       - --check=false
