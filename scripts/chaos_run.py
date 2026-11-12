@@ -1,4 +1,4 @@
-"""Chaos suite (BLUEPRINT.md §10): real failures under load, checked against
+"""Chaos suite (docs/ARCHITECTURE.md §10): real failures under load, checked against
 a manifest of every request sent.
 
     python scripts/chaos_run.py --scenario all --events 20000      # make chaos
@@ -49,7 +49,6 @@ import os
 import pathlib
 import random
 import re
-import statistics
 import subprocess
 import sys
 import threading
@@ -66,7 +65,11 @@ RESULTS = ROOT / "docs" / "results"
 API = "http://localhost:8000"
 BOOTSTRAP = "localhost:19092"
 DSN = "postgresql://payments:payments@localhost:5433/payments"
-PROJECT = "idempotent-payments"
+# Compose names the project after the checkout's directory (lowercased,
+# other characters dropped) unless COMPOSE_PROJECT_NAME says otherwise.
+PROJECT = os.environ.get("COMPOSE_PROJECT_NAME") or re.sub(
+    r"[^a-z0-9_-]", "", pathlib.Path(__file__).resolve().parent.parent.name.lower()
+)
 # db-outage is last so the first four keep the seeds they had in Phase 8.
 SCENARIOS = ("consumer-kill", "broker-outage", "db-restart", "relay-kill", "db-outage")
 RETRY_TOPICS = ("payments.retry.5s", "payments.retry.1m", "payments.retry.10m")
@@ -485,7 +488,7 @@ class Fault(threading.Thread):
             log(f"FAULT ERROR {exc!r}")
 
     def consumer_kill(self) -> None:
-        victims = sorted(sh("docker", "ps", "--filter", f"label=com.docker.compose.service=consumer",
+        victims = sorted(sh("docker", "ps", "--filter", "label=com.docker.compose.service=consumer",
                             "--filter", f"label=com.docker.compose.project={PROJECT}",
                             "--format", "{{.Names}}").split())
         victim = random.Random(self.at).choice(victims)

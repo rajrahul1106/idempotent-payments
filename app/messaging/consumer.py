@@ -1,6 +1,6 @@
 """The main consumer: each event's side effect applied exactly once.
 
-Blueprint section 8, steps 12 and 13. Per message:
+docs/ARCHITECTURE.md §8, steps 12 and 13. Per message:
 
     parse and validate the event (event_id header must match the payload)
     BEGIN
@@ -15,7 +15,7 @@ crash after it but before the offset commit redelivers a message whose
 processed_events row already exists, so it is skipped. Either way the
 effect happens once. Delivery is at least once; processing is exactly once.
 
-A failed message never blocks the ones behind it (blueprint §5.4, decision
+A failed message never blocks the ones behind it (docs/ARCHITECTURE.md §5.4, decision
 D5 in §16). The error decides where it goes:
 
     permanent       publish to the DLQ, then commit the offset

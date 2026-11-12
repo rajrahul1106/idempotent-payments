@@ -1,6 +1,6 @@
 """The only module that converts between minor units and Decimal.
 
-Blueprint section 5.2. Keeping every conversion here means the rule
+docs/ARCHITECTURE.md §5.2. Keeping every conversion here means the rule
 "money is never a float" is auditable by reading one file.
 
 Wire format is an integer count of minor units plus an ISO 4217 code:

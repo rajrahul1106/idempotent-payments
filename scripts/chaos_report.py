@@ -123,7 +123,7 @@ def machine_section(machine: dict, host: dict | None) -> list[str]:
         "(512 MB), Jaeger (512 MB cap), Prometheus and Grafana; one API process "
         "(uvicorn, one worker). The load generator runs on the host.",
         "- Every number below comes from this machine. 6 GB or more for Docker is advised "
-        "where available (BLUEPRINT.md §15, limitation 16).",
+        "where available (docs/ARCHITECTURE.md §15, limitation 16).",
         "",
     ]
     return lines

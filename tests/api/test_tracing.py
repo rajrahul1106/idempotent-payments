@@ -1,4 +1,4 @@
-"""Tracing in the API process (blueprint §5.8, Phase 7a).
+"""Tracing in the API process (docs/ARCHITECTURE.md §5.8, Phase 7a).
 
 The error body's trace_id is the request's real trace id; the payment's
 server span carries the agreed attributes and nothing secret; the outbox

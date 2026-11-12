@@ -3,7 +3,7 @@
 Repositories never commit. The relay owns the transaction.
 
 The claim query is the interesting part. It takes `FOR UPDATE SKIP LOCKED`,
-and exactly one relay instance runs (blueprint decision D1). A second
+and exactly one relay instance runs (decision D1, docs/ARCHITECTURE.md §16). A second
 relay would claim the next batch and could publish an account's later
 event before the first relay publishes its earlier one, which breaks
 per-account ordering. SKIP LOCKED stays because it is harmless with one

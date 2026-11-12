@@ -1,6 +1,6 @@
 """Engine, session factory, and the one place transactions are opened.
 
-Rule from the blueprint: services own transaction boundaries, repositories
+Rule (docs/ARCHITECTURE.md §12): services own transaction boundaries, repositories
 never commit. `unit_of_work()` is the only commit point in the write path.
 """
 

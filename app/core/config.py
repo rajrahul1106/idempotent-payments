@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     consumer_db_backoff_initial_ms: int = 500
     consumer_db_backoff_max_ms: int = 10_000
 
-    # Retry tiers, in seconds. Blueprint section 5.4.
+    # Retry tiers, in seconds. docs/ARCHITECTURE.md §5.4.
     # NoDecode: read the env var as a plain string so the validator below
     # parses "5,60,600" rather than pydantic trying to JSON-decode it.
     retry_tier_seconds: Annotated[tuple[int, ...], NoDecode] = (5, 60, 600)
@@ -83,9 +83,6 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expiry_minutes: int = 15
     rate_limit_per_minute: int = 100
-
-    # --- idempotency -----------------------------------------------------
-    idempotency_ttl_hours: int = 24
 
     @field_validator("retry_tier_seconds", mode="before")
     @classmethod

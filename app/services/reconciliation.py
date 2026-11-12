@@ -1,4 +1,4 @@
-"""The four invariant checks, on demand and on a schedule (blueprint §9, §10).
+"""The four invariant checks, on demand and on a schedule (docs/ARCHITECTURE.md §9, §10).
 
     I1  no_duplicate_event_ids  an event_id whose postings span more than one
                                 transaction: one event applied twice to the

@@ -12,7 +12,9 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from app.api.body_limit import MAX_BODY_BYTES, BodySizeLimit
 from app.api.errors import register_error_handlers
+from app.api.routes import accounts, admin, auth, dlq, payments
 from app.core import metrics
 from app.core.config import settings
 from app.core.telemetry import setup_tracing, shutdown_tracing
@@ -112,25 +114,16 @@ async def ready() -> JSONResponse:
     return JSONResponse(status_code=200 if db_ok else 503, content=payload)
 
 
-def _register_routers() -> None:
-    """Routers are added phase by phase. Missing ones are not an error yet."""
-    from importlib import import_module
-
-    for module_name, prefix in (
-        ("app.api.routes.auth", "/v1"),
-        ("app.api.routes.accounts", "/v1"),
-        ("app.api.routes.payments", "/v1"),
-        ("app.api.routes.dlq", "/v1"),
-        ("app.api.routes.admin", "/v1"),
-    ):
-        try:
-            module = import_module(module_name)
-        except ModuleNotFoundError:
-            continue
-        app.include_router(module.router, prefix=prefix)
+# Imported directly, not discovered: a router that fails to import must stop
+# the process at startup, never leave the API running with its endpoints
+# missing.
+for _router in (auth.router, accounts.router, payments.router, dlq.router, admin.router):
+    app.include_router(_router, prefix="/v1")
 
 
-_register_routers()
+# Outermost but for the tracing middleware added below, so a refused body is
+# still traced and its error carries the trace id.
+app.add_middleware(BodySizeLimit, max_bytes=MAX_BODY_BYTES)
 
 
 def _instrument() -> None:

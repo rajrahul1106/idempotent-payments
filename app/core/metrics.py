@@ -1,4 +1,4 @@
-"""Prometheus metrics, all defined here (blueprint §11).
+"""Prometheus metrics, all defined here (docs/ARCHITECTURE.md §11).
 
 Each process serves its own /metrics: the API on its HTTP port, every other
 process on settings.metrics_port through start_metrics_server.

@@ -81,6 +81,7 @@ def serve():
     yield _serve
     for server in servers:
         server.shutdown()
+        server.server_close()
 
 
 def test_healthcheck_passes_on_a_fresh_heartbeat(serve):

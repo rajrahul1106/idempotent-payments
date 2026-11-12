@@ -281,6 +281,7 @@ def test_crash_between_forward_and_offset_commit(kafka, make_ladder, group_id, p
     )
     line = victim.stdout.readline().split()
     victim.wait(timeout=30)
+    victim.stdout.close()
     assert line == ["crash-after-forward", ladder.retries[0]], line
     assert victim.returncode == -signal.SIGKILL
     # The forward was acknowledged; the original offset was not committed.

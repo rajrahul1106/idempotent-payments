@@ -1,17 +1,18 @@
 """JWT issuing and verification, argon2 password hashing.
 
-Deliberately simple, and the limits are stated in the blueprint: no
+Deliberately simple, and the limits are stated in docs/ARCHITECTURE.md §9: no
 refresh tokens, no key rotation, no external identity provider.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import secrets
 from typing import Literal
 
 import jwt
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError, VerificationError
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
 from app.core.config import settings
 
@@ -23,6 +24,13 @@ ROLE_ORDER: tuple[Role, ...] = ("viewer", "client", "operator")
 
 _hasher = PasswordHasher()
 
+#: A real argon2id hash, with this hasher's parameters, of a random password
+#: nobody knows. Login verifies against it when the username does not exist,
+#: so an unknown user costs the same argon2 work as a wrong password and the
+#: response time does not reveal which usernames exist. A malformed
+#: placeholder would fail parsing in microseconds instead.
+DUMMY_PASSWORD_HASH = _hasher.hash(secrets.token_urlsafe(32))
+
 
 def hash_password(password: str) -> str:
     return _hasher.hash(password)
@@ -31,7 +39,7 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, password_hash: str) -> bool:
     try:
         return _hasher.verify(password_hash, password)
-    except (VerifyMismatchError, VerificationError):
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
         return False
 
 

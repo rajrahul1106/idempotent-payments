@@ -2,7 +2,8 @@
 
 Scope limitation, stated plainly: this is per-process. Two API containers
 means two independent buckets. Fixing that needs shared state, which the
-blueprint defers rather than pulling Redis in for one feature.
+design defers rather than pulling Redis in for one feature
+(docs/ARCHITECTURE.md §15, limitation 2).
 """
 
 from __future__ import annotations

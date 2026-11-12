@@ -1,0 +1,40 @@
+# The image needs app/, migrations/, alembic.ini, scripts/ and the
+# requirements files. Everything else stays out of the build context.
+
+# Version control and CI
+.git
+.gitignore
+.github
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+.venv
+venv
+
+# Editors and assistants
+.claude
+.vscode
+.idea
+.DS_Store
+
+# Caches
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.hypothesis
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Not used inside a container
+docs
+tests
+monitoring
+*.md
+LICENSE
+docker-compose.yml
+Dockerfile
+.dockerignore

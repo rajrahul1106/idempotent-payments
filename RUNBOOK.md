@@ -1,6 +1,6 @@
 # Runbook
 
-Seven failure scenarios (BLUEPRINT.md §11, plus the DLQ writer crash loop),
+Seven failure scenarios (docs/ARCHITECTURE.md §11, plus the DLQ writer crash loop),
 one general "process down" procedure and one client-bug appendix. Each gives
 the symptom, the alert that fires, how to diagnose, how to recover, and
 whether each step is safe to repeat.
@@ -833,7 +833,7 @@ purpose.
    drills (D21):** an account lock timeout now returns 503 `service_busy`
    with `Retry-After: 1`, and a retry with the same key is processed
    normally. `sys_settlement` is such an account for every deposit and
-   withdrawal (BLUEPRINT.md §15).
+   withdrawal (docs/ARCHITECTURE.md §15, limitation 15).
 2. **Jaeger was OOM-killed** during the 12,000-payment run (in-memory
    storage, no cap, no restart policy), and still restarted with a
    20,000-trace cap. **Fixed after the drills:** `MEMORY_MAX_TRACES=5000`,

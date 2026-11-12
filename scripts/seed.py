@@ -8,7 +8,6 @@ invariant cannot hold.
 from __future__ import annotations
 
 import sys
-from decimal import Decimal
 
 from sqlalchemy import select
 

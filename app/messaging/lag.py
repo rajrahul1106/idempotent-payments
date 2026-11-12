@@ -1,4 +1,4 @@
-"""Consumer lag from the broker's point of view (blueprint §11).
+"""Consumer lag from the broker's point of view (docs/ARCHITECTURE.md §11).
 
 Lag is the partition's high watermark minus the group's committed offset,
 read with the admin client. It needs nothing from the consumer itself, so

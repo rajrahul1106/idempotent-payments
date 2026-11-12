@@ -94,12 +94,3 @@ DEFAULT_LADDER = TopicLadder(
     retry_delays=tuple(float(s) for s in settings.retry_tier_seconds),
     dlq=DLQ_TOPIC,
 )
-
-
-def next_retry_topic(attempt_count: int) -> str:
-    """The production ladder's next topic. See TopicLadder.next_topic.
-
-    >>> next_retry_topic(0) == RETRY_TOPICS[0]
-    True
-    """
-    return DEFAULT_LADDER.next_topic(attempt_count)

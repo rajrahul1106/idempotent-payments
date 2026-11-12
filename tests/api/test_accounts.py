@@ -35,6 +35,25 @@ def test_unknown_user_rejected(client, seeded):
     assert resp.status_code == 401
 
 
+def test_unknown_user_takes_as_long_as_a_wrong_password(client, seeded):
+    """The response time must not reveal which usernames exist."""
+    import time
+
+    def median_seconds(username: str) -> float:
+        times = []
+        for _ in range(5):
+            started = time.perf_counter()
+            resp = client.post(
+                "/v1/auth/token", json={"username": username, "password": "wrong"}
+            )
+            times.append(time.perf_counter() - started)
+            assert resp.status_code == 401
+        return sorted(times)[2]
+
+    known, unknown = median_seconds("operator"), median_seconds("nobody")
+    assert 0.5 < unknown / known < 2.0, (known, unknown)
+
+
 def test_missing_token_is_401(client, seeded):
     assert client.get("/v1/accounts/acc_alice").status_code == 401
 

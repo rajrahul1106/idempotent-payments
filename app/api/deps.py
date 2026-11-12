@@ -74,7 +74,7 @@ def require_role(required: Role):
     return _check
 
 
-# Blueprint decision D4. The role order above says which endpoints a role
+# Decision D4 (docs/ARCHITECTURE.md §16). The role order above says which endpoints a role
 # may call; this says which rows it may see. viewer and operator read
 # everything. Any other role, which today means client, reads only the
 # account its token names.
@@ -104,8 +104,8 @@ def rate_limit(request: Request) -> None:
     """In-memory token bucket, per subject.
 
     Correct for a single API process only. Running two API containers
-    gives each its own bucket. This limitation is stated in the blueprint
-    rather than papered over.
+    gives each its own bucket. This limitation is stated in
+    docs/ARCHITECTURE.md §15 (limitation 2) rather than papered over.
     """
     from app.core.rate_limit import limiter
 

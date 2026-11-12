@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session
-from app.core.security import issue_token, verify_password
+from app.core.security import DUMMY_PASSWORD_HASH, issue_token, verify_password
 from app.db.models.messaging import AuthUser
 from app.schemas.common import TokenOut, TokenRequest
 
@@ -18,9 +18,9 @@ def create_token(
     body: TokenRequest, session: Session = Depends(db_session)
 ) -> TokenOut:
     user = session.get(AuthUser, body.username)
-    # Verify even when the user is missing, so a timing difference does not
-    # reveal which usernames exist.
-    stored_hash = user.password_hash if user else "$argon2id$v=19$m=65536,t=3,p=4$x$x"
+    # Verify even when the user is missing, against a real hash, so an
+    # unknown username takes as long as a wrong password.
+    stored_hash = user.password_hash if user else DUMMY_PASSWORD_HASH
     ok = verify_password(body.password, stored_hash)
 
     if not user or not ok:

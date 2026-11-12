@@ -1,6 +1,6 @@
 """One error body shape for every endpoint.
 
-Blueprint section 7: every error returns
+docs/ARCHITECTURE.md §7: every error returns
 {"error": {"code", "message", "request_id", "trace_id"}}.
 """
 

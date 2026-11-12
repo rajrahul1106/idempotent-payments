@@ -1,5 +1,5 @@
 """One retry tier: hold each message until it is old enough, then send it
-back to the main topic (blueprint §5.4).
+back to the main topic (docs/ARCHITECTURE.md §5.4).
 
 A message is due `delay` seconds after it was written to this tier, by its
 Kafka timestamp. Messages in one partition arrive in that order, so when

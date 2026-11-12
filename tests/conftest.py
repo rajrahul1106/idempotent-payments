@@ -226,7 +226,7 @@ def auth(operator_token):
 
 @pytest.fixture
 def owner_token():
-    """A client token that owns the given account (blueprint decision D4).
+    """A client token that owns the given account (decision D4, docs/ARCHITECTURE.md §16).
 
     Signed with the same secret the API verifies, so it is a real token; it
     just skips the seeded-user lookup, which test_accounts.py covers.

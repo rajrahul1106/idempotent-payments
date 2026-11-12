@@ -1,6 +1,6 @@
 """The consumer's side effect, applied at most once per event and group.
 
-Blueprint sections 2 and 8, steps 12 and 13. One database transaction
+docs/ARCHITECTURE.md §2 and §8, steps 12 and 13. One database transaction
 records the event in processed_events and writes the payment_events
 projection. If the event is already recorded, nothing is written. The
 caller commits the Kafka offset only after this function returns, so a

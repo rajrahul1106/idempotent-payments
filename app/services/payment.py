@@ -1,6 +1,6 @@
 """The write path. This module owns the transaction boundary.
 
-Blueprint section 8, steps 5 to 10. Everything below happens inside one
+docs/ARCHITECTURE.md §8, steps 5 to 10. Everything below happens inside one
 Postgres transaction: the transaction row, both postings, the idempotency
 key and the outbox row. Either all five land or none do, which is what
 removes the dual-write problem.
@@ -30,8 +30,8 @@ from app.core.exceptions import (
     RequestInProgress,
     SameAccountTransfer,
 )
-from app.core.money import format_amount, to_decimal, to_minor
-from app.db.models.ledger import Account, Posting, Transaction
+from app.core.money import format_amount, to_decimal
+from app.db.models.ledger import Posting, Transaction
 from app.db.models.messaging import IdempotencyKey, OutboxEvent
 from app.db.repositories import accounts as account_repo
 from app.db.repositories import outbox as outbox_repo
@@ -72,7 +72,7 @@ def _is_idempotency_key_conflict(exc: IntegrityError) -> bool:
 class Actor:
     """Who is asking, taken from the verified token.
 
-    Blueprint decision D4: a client debits only the account its token names,
+    Decision D4 (docs/ARCHITECTURE.md §16): a client debits only the account its token names,
     and only an operator debits a system account.
     """
 

@@ -92,11 +92,12 @@ class RelayProcess:
         self.published_file = tmp_path / f"{name}.published"
         self.log_file = tmp_path / f"{name}.log"
         self.published_file.touch()
+        self._stderr = open(self.log_file, "w")  # closed in stop()
         self.proc = subprocess.Popen(
             [sys.executable, "-c", _RELAY_PROCESS, str(self.published_file)],
             cwd=ROOT,
             stdout=subprocess.DEVNULL,
-            stderr=open(self.log_file, "w"),
+            stderr=self._stderr,
         )
 
     @property
@@ -116,6 +117,7 @@ class RelayProcess:
         if self.proc.poll() is None:
             self.proc.send_signal(sig)
             self.proc.wait(timeout=20)
+        self._stderr.close()
 
 
 @pytest.fixture

@@ -1,6 +1,6 @@
 """Create the topics the system owns, with the partition count it relies on.
 
-Blueprint section 5.3: payments.main has 6 partitions, and that number
+docs/ARCHITECTURE.md §5.3: payments.main has 6 partitions, and that number
 cannot change without a rebalance plan, because more partitions remap keys
 and break per-account ordering. So this module never alters a topic. It
 creates what is missing and refuses to continue when a topic exists with a
@@ -22,7 +22,7 @@ from app.messaging import topics
 
 logger = logging.getLogger(__name__)
 
-# Blueprint section 9: retention is 7 days, so a day of events can be
+# docs/ARCHITECTURE.md §9: retention is 7 days, so a day of events can be
 # replayed by resetting a consumer group.
 RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 

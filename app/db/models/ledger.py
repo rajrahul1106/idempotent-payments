@@ -1,6 +1,6 @@
 """Accounts, transactions and postings: the money tables.
 
-Design rules from the blueprint:
+Design rules (docs/ARCHITECTURE.md §4):
   - `accounts` has no balance column. Balance is SUM(postings.amount).
   - `postings` is append-only, enforced by database rules in the migration.
   - Every monetary column is NUMERIC(20,4), mapped to Decimal in Python.
@@ -61,7 +61,7 @@ class Account(Base):
 
         A deposit from outside the system must still produce two postings
         that sum to zero, so the system account legitimately runs negative.
-        Blueprint section 4.
+        docs/ARCHITECTURE.md §4.
         """
         return self.account_type == "system"
 

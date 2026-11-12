@@ -1,4 +1,4 @@
-"""Phase 3 gate: the four idempotency cases from the blueprint."""
+"""Phase 3 gate: the four idempotency cases (docs/ARCHITECTURE.md §10)."""
 
 from __future__ import annotations
 

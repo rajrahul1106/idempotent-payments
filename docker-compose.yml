@@ -1,4 +1,5 @@
-name: idempotent-payments
+# No top-level name: Compose names the project after the checkout's
+# directory, so a second checkout gets its own containers and volumes.
 
 services:
   postgres:
@@ -18,7 +19,7 @@ services:
       retries: 20
 
   # Redpanda is Kafka-protocol compatible and runs as a single container
-  # with no ZooKeeper or KRaft setup. Blueprint section 6.
+  # with no ZooKeeper or KRaft setup. docs/ARCHITECTURE.md §6.
   #
   # Memory: with --memory 1G and no limit it was OOM-killed twice when the
   # 4 GB Docker VM ran out under load, and with no restart policy it stayed
@@ -75,7 +76,7 @@ services:
       redpanda:
         condition: service_healthy
 
-  # Exactly one relay instance (blueprint decision D1). Two relays could
+  # Exactly one relay instance (decision D1, docs/ARCHITECTURE.md §16). Two relays could
   # each claim a batch and publish one account's events out of order.
   relay:
     build: .
@@ -132,7 +133,7 @@ services:
     # on (decision D5). It exits only on a fatal broker error.
     restart: unless-stopped
 
-  # One consumer per retry tier (blueprint §5.4). Each holds a message until
+  # One consumer per retry tier (docs/ARCHITECTURE.md §5.4). Each holds a message until
   # its delay has passed, then returns it to payments.main. They never touch
   # the database. Delays come from RETRY_TIER_SECONDS (default 5,60,600).
 

@@ -1,6 +1,6 @@
 """What a database error means, in one place.
 
-The API maps "the database is not there" to 503 (blueprint §8). The
+The API maps "the database is not there" to 503 (docs/ARCHITECTURE.md §8). The
 consumers map the same condition to "hold the message and retry it"
 (decision D5). Both ask this module, so they cannot disagree. Nothing here
 imports the web framework.

@@ -1,4 +1,4 @@
-# Alert rules. Thresholds from BLUEPRINT.md §11; each alert names the
+# Alert rules. Thresholds from docs/ARCHITECTURE.md §11; each alert names the
 # RUNBOOK.md scenario that handles it. No Alertmanager: these show at
 # http://localhost:9090/alerts. Unit tests: alerts_test.yml (make rules).
 

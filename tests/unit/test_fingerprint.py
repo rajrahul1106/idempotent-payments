@@ -1,4 +1,4 @@
-"""Blueprint section 5.5: the idempotency fingerprint and its canonical JSON.
+"""docs/ARCHITECTURE.md §5.5: the idempotency fingerprint and its canonical JSON.
 
 SHA-256 over the canonical form of the request body: sorted keys, no
 whitespace, UTF-8. Each test pins one property of that form, so a change

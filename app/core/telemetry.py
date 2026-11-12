@@ -1,4 +1,4 @@
-"""OpenTelemetry setup and trace-context helpers (blueprint §5.8).
+"""OpenTelemetry setup and trace-context helpers (docs/ARCHITECTURE.md §5.8).
 
 One TracerProvider per process, named for the process: api, relay,
 consumer, retry-5s, retry-1m, retry-10m, dlq-writer, reconciliation. Spans

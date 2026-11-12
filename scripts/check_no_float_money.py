@@ -1,6 +1,6 @@
 """Static check: no float anywhere near money.
 
-Blueprint section 5.2 verification. This walks the AST of app/ and fails
+docs/ARCHITECTURE.md §5.2 verification. This walks the AST of app/ and fails
 the build if a monetary identifier is annotated as float, or if float()
 is called on one. Cheap to run, and it catches the one mistake that
 cannot be fixed later.

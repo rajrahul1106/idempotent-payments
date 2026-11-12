@@ -1,6 +1,6 @@
 """Idempotency key handling: canonical fingerprint and the three branches.
 
-Blueprint section 5.5. Canonicalisation is JSON with sorted keys, no
+docs/ARCHITECTURE.md §5.5. Canonicalisation is JSON with sorted keys, no
 whitespace, UTF-8. The hash covers the request body only, never headers,
 so a changed User-Agent does not look like a changed request.
 """
@@ -37,10 +37,6 @@ class Outcome(Enum):
 class Lookup:
     outcome: Outcome
     record: IdempotencyKey | None = None
-
-    @property
-    def is_replay(self) -> bool:
-        return self.outcome is Outcome.REPLAY
 
 
 def inspect(session: Session, key: str, body_fingerprint: str) -> Lookup:

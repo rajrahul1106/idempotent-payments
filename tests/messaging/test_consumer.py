@@ -117,6 +117,7 @@ def test_consumer_killed_mid_batch_then_restarted_applies_every_event_once(
     finally:
         victim.send_signal(signal.SIGKILL)
         victim.wait(timeout=10)
+        victim.stdout.close()
     assert victim.returncode == -signal.SIGKILL
     done_before_kill = processed_count(group_id)
     assert done_before_kill < 300, "killed too late to be mid-batch"
@@ -142,6 +143,7 @@ def test_crash_after_db_commit_before_offset_commit_skips_the_redelivery(
     victim = _consumer_process(fresh_ladder, group_id, "crash", "40")
     line = victim.stdout.readline().split()
     victim.wait(timeout=30)
+    victim.stdout.close()
     assert line[:1] == ["crash-after-db-commit"], line
     crashed_event = line[1]
     assert victim.returncode == -signal.SIGKILL

@@ -18,7 +18,7 @@ doing, so the step where it stops scaling can be explained, not guessed:
                  the load client's own CPU time
     DB pool      the API's checked-out connections (its /metrics, every 1 s)
     NOTIFY lock  backends waiting for the database-wide lock a NOTIFY takes
-                 at commit (pg_locks, every 1 s; BLUEPRINT.md §15 lim. 11)
+                 at commit (pg_locks, every 1 s; docs/ARCHITECTURE.md §15 lim. 11)
     row locks    backends waiting on another transaction (hot accounts)
     relay        payments created per second against outbox rows published
                  per second, outbox backlog and publish delay (§15 lim. 10)

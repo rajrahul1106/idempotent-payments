@@ -1,4 +1,4 @@
-"""DLQ responses (blueprint §7)."""
+"""DLQ responses (docs/ARCHITECTURE.md §7)."""
 
 from __future__ import annotations
 

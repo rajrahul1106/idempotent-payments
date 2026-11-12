@@ -86,8 +86,8 @@ def test_default_ladder_matches_settings():
 
     assert topics.DEFAULT_LADDER.retries == settings.retry_topics
     assert topics.DEFAULT_LADDER.retry_delays == (5.0, 60.0, 600.0)
-    assert topics.next_retry_topic(0) == "payments.retry.5s"
-    assert topics.next_retry_topic(3) == topics.DLQ_TOPIC
+    assert topics.DEFAULT_LADDER.next_topic(0) == "payments.retry.5s"
+    assert topics.DEFAULT_LADDER.next_topic(3) == topics.DLQ_TOPIC
 
 
 # --- failure history headers ------------------------------------------------------------

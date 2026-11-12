@@ -6,7 +6,7 @@
 - Docker VM: 3.83 GB memory, 8 CPUs, no other projects or Docker extensions running
 - Power: AC Power, Low Power Mode off (recorded by `pmset` at the start of every run since Day 5a)
 - The whole stack runs in that VM: 13 containers, including Postgres, Redpanda (512 MB), Jaeger (512 MB cap), Prometheus and Grafana; one API process (uvicorn, one worker). The load generator runs on the host.
-- Every number below comes from this machine. 6 GB or more for Docker is advised where available (BLUEPRINT.md §15, limitation 16).
+- Every number below comes from this machine. 6 GB or more for Docker is advised where available (docs/ARCHITECTURE.md §15, limitation 16).
 
 ## How a run is judged
 

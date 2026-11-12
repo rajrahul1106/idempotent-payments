@@ -5,8 +5,8 @@ in app/api/errors.py. Keeping them out of app.api means a process that is
 not the API, such as the Phase 5 consumer, can raise and catch them
 without importing the web framework.
 
-Each class carries the HTTP status and error code from the blueprint's
-error table (section 7), so the mapping lives next to the meaning.
+Each class carries the HTTP status and error code from the API's
+error table (docs/ARCHITECTURE.md §7, docs/API.md), so the mapping lives next to the meaning.
 """
 
 from __future__ import annotations

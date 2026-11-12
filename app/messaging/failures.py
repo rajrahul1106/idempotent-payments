@@ -1,4 +1,4 @@
-"""What to do with a message that failed (decision D5, blueprint §16).
+"""What to do with a message that failed (decision D5, docs/ARCHITECTURE.md §16).
 
 Every processing error is one of three kinds:
 

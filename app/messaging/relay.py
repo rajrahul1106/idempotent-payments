@@ -25,7 +25,7 @@ outbox.claim_batch), so continuing past a failed row would publish a later
 event for the same account before an earlier one and break per-account
 ordering.
 
-Exactly one relay instance runs (blueprint decision D1), and the database
+Exactly one relay instance runs (decision D1, docs/ARCHITECTURE.md §16), and the database
 enforces it: run_forever publishes only while it holds a Postgres advisory
 lock, taken on a dedicated connection outside the pool and confirmed with
 the server before every batch. A second relay logs that the lock is taken
@@ -330,7 +330,6 @@ class OutboxListener:
     def __init__(self, conninfo: str | None = None) -> None:
         self._conninfo = conninfo or _conninfo()
         self._conn = None
-        self.notifications = 0
 
     def _connect(self):
         import psycopg
@@ -353,7 +352,6 @@ class OutboxListener:
             if self._conn is None or self._conn.closed:
                 self._conn = self._connect()
             for _ in self._conn.notifies(timeout=timeout, stop_after=1):
-                self.notifications += 1
                 return True
             return False
         except psycopg.Error as exc:

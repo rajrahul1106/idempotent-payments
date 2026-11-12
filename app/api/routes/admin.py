@@ -1,4 +1,4 @@
-"""GET /v1/admin/reconciliation. Operator only (blueprint §7)."""
+"""GET /v1/admin/reconciliation. Operator only (docs/ARCHITECTURE.md §7)."""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 """Phase 8: a Hypothesis state machine against the real API, database and
-broker (BLUEPRINT.md §10, property-based testing design).
+broker (docs/ARCHITECTURE.md §10, property-based testing design).
 
 A Python model holds every account's balance as Decimal. Hypothesis
 generates sequences of operations, applies each to the real system through

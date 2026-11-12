@@ -4,7 +4,7 @@ Revision ID: 0002
 Revises: 0001
 Create Date: 2026-11-10
 
-Blueprint section 5.2: money in Postgres is NUMERIC(20,4). 0001 created
+docs/ARCHITECTURE.md §5.2: money in Postgres is NUMERIC(20,4). 0001 created
 payment_events.amount_minor as BIGINT minor units, a second representation
 of money in the database. This makes it NUMERIC(20,4), the same as
 postings.amount, and renames it to amount because it no longer holds minor

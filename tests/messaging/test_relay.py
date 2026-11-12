@@ -87,6 +87,8 @@ def test_relay_process_killed_mid_batch_recovers_all_50(make_outbox_rows):
     finally:
         victim.kill()  # SIGKILL: no finally blocks, no rollback from Python
         victim.wait(timeout=10)
+        victim.stdout.close()
+        victim.stderr.close()
 
     # Postgres sees the dropped connection and aborts the relay's batch.
     deadline = time.monotonic() + 10

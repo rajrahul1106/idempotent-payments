@@ -8,8 +8,11 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends gcc libpq-dev curl \
  && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Every package from the lock, transitive ones included, and nothing else:
+# --no-deps stops pip resolving anything the lock does not name, and
+# pip check fails the build if the lock is incomplete.
+COPY requirements.lock .
+RUN pip install --no-cache-dir --no-deps -r requirements.lock && pip check
 
 COPY . .
 

@@ -1,4 +1,4 @@
-"""Blueprint decision D4: who may read and debit which account.
+"""Decision D4 (docs/ARCHITECTURE.md §16): who may read and debit which account.
 
 viewer and operator read everything. A client reads only its own account,
 and only the payments it pays or receives. A client debits only its own
@@ -87,7 +87,7 @@ def test_client_reads_only_payments_it_pays_or_receives(
     assert denied.status_code == 403
     assert _code(denied) == "forbidden"
 
-    # G13: the blueprint names client for this endpoint; D4 adds that viewer
+    # The original design named only client for this endpoint; D4 adds that viewer
     # and operator read every payment.
     assert read(viewer_token, unrelated).status_code == 200
     assert read(operator_token, unrelated).status_code == 200

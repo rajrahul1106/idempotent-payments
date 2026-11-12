@@ -1,7 +1,7 @@
 """Fixtures for the relay, consumer and retry/DLQ tests.
 
 `RecordingProducer` stands in for a broker. This is deliberate and it is
-not a mocked broker in the sense the blueprint rules out: what is under
+not a mocked broker in the sense the test strategy rules out: what is under
 test in Phase 4 is whether the relay loses a committed row, and that is a
 question about PostgreSQL and the relay's transaction boundary, both of
 which are real here. A double is also the only way to inject the failures

@@ -1,4 +1,4 @@
-"""Blueprint section 12 layering, checked rather than trusted.
+"""docs/ARCHITECTURE.md §12 layering, checked rather than trusted.
 
 Services and messaging must not depend on the web layer. The Phase 5
 consumer will import the services, and it must not drag FastAPI and

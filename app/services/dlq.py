@@ -1,4 +1,4 @@
-"""The dead-letter store and operator replay (blueprint §5.4 and §7).
+"""The dead-letter store and operator replay (docs/ARCHITECTURE.md §5.4 and §7).
 
 Recording. The DLQ writer persists each message from payments.dlq in one
 transaction with a processed_events row under its own consumer group, the
