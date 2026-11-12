@@ -1,0 +1,223 @@
+{
+  "run": "broker-outage-20000-20261112T201538",
+  "scenario": "broker-outage",
+  "verdict": "PASS",
+  "seed": 9,
+  "round": 1,
+  "events_planned": 20000,
+  "concurrency": 16,
+  "machine": {
+    "host": "MacBook Air, Apple M2, 8 GB",
+    "host_cpu": "Apple M2",
+    "host_memory_gb": 8,
+    "docker_vm_memory_gb": 3.83,
+    "docker_vm_cpus": 8
+  },
+  "timing": {
+    "started_at": "2026-11-12T14:45:38+00:00",
+    "traffic_started_at": "2026-11-12T14:45:48+00:00",
+    "traffic_ended_at": "2026-11-12T14:48:49+00:00",
+    "ended_at": "2026-11-12T14:49:01+00:00"
+  },
+  "cpu": {
+    "container_cpu_seconds_during_traffic": {
+      "api": 170.8,
+      "consumer": 27.0,
+      "dlq-writer": 7.2,
+      "grafana": 0.4,
+      "jaeger": 9.7,
+      "postgres": 56.5,
+      "prometheus": 1.4,
+      "reconciliation": null,
+      "redpanda": null,
+      "relay": 36.2,
+      "retry-10m": 6.9,
+      "retry-1m": 7.5,
+      "retry-5s": 7.0
+    },
+    "vm_busy_cpu_seconds_during_traffic": 401.8,
+    "vm_cpu_utilisation_during_traffic": 0.28,
+    "vm_busy_cpu_seconds_per_1000_requests": 20.3,
+    "load_client_cpu_seconds": 21.8
+  },
+  "thermal": {
+    "cpu_benchmark_before": {
+      "single_thread_s": 0.173,
+      "eight_processes_s": 1.291
+    },
+    "cpu_benchmark_after": {
+      "single_thread_s": 0.168,
+      "eight_processes_s": 1.883
+    },
+    "host_before": {
+      "power_source": "AC Power",
+      "battery": "81%; charging; (no estimate) present: true",
+      "low_power_mode": false,
+      "pmset_therm": [
+        "Note: No thermal warning level has been recorded",
+        "Note: No performance warning level has been recorded",
+        "Note: No CPU power status has been recorded"
+      ],
+      "load_average": "{ 5.69 5.39 4.88 }"
+    },
+    "host_after": {
+      "power_source": "AC Power",
+      "battery": "81%; charging; 2:32 remaining present: true",
+      "low_power_mode": false,
+      "pmset_therm": [
+        "Note: No thermal warning level has been recorded",
+        "Note: No performance warning level has been recorded",
+        "Note: No CPU power status has been recorded"
+      ],
+      "load_average": "{ 5.59 5.53 5.05 }"
+    }
+  },
+  "load": {
+    "payment_requests": 16834,
+    "resends_same_key_same_body": 2960,
+    "poison_published": 206,
+    "hot_account_share": 0.098,
+    "accounts": 201
+  },
+  "results": {
+    "traffic_seconds": 181.4,
+    "throughput_requests_per_s": 109.1,
+    "throughput_payments_created_per_s": 92.8,
+    "latency_ms": {
+      "p50": 97.0,
+      "p95": 204.2,
+      "p99": 304.1
+    },
+    "http_attempt_statuses": {
+      "201": 16834,
+      "200": 2960
+    },
+    "final_statuses": {
+      "201": 16834,
+      "200": 2960
+    },
+    "count_503": 0,
+    "window_503_seconds": 0,
+    "recovery_seconds_after_fault": 66.2,
+    "drain_seconds_after_traffic": 6.9,
+    "fault_timeline": [
+      [
+        "stop redpanda",
+        "2026-11-12T14:46:44.695292+00:00"
+      ],
+      [
+        "start redpanda",
+        "2026-11-12T14:47:46.390761+00:00"
+      ],
+      [
+        "restored",
+        "2026-11-12T14:47:46.898091+00:00"
+      ]
+    ],
+    "vm_min_available_mb": 1203,
+    "peak_memory_mb": {
+      "api": 112,
+      "consumer": 101,
+      "dlq-writer": 68,
+      "grafana": 126,
+      "jaeger": 453,
+      "postgres": 513,
+      "prometheus": 83,
+      "reconciliation": 93,
+      "redpanda": 470,
+      "relay": 78,
+      "retry-10m": 80,
+      "retry-1m": 66,
+      "retry-5s": 78
+    },
+    "peak_cpu_percent": {
+      "api": 143,
+      "consumer": 73,
+      "dlq-writer": 39,
+      "grafana": 4,
+      "jaeger": 11,
+      "postgres": 62,
+      "prometheus": 4,
+      "reconciliation": 23,
+      "redpanda": 84,
+      "relay": 65,
+      "retry-10m": 53,
+      "retry-1m": 21,
+      "retry-5s": 76
+    }
+  },
+  "checks": {
+    "zero_500_responses": {
+      "pass": true,
+      "500s": 0
+    },
+    "one_transaction_per_201_key": {
+      "pass": true,
+      "keys_answered_201": 16834,
+      "keys_paid_but_only_answered_by_replay": 0,
+      "transactions_for_run_accounts": 17035,
+      "funding_transactions": 201,
+      "keys_with_two_payment_ids": 0,
+      "keys_whose_stored_transaction_differs": 0
+    },
+    "one_payment_events_row_per_event": {
+      "pass": true,
+      "events": 16834,
+      "rows": 16834
+    },
+    "dlq_is_exactly_the_poison": {
+      "pass": true,
+      "injected": 206,
+      "dlq_rows": 206,
+      "unexpected": 0,
+      "missing": 0
+    },
+    "nothing_sent_to_retry_topics": {
+      "pass": true,
+      "messages": {
+        "payments.retry.5s": 0,
+        "payments.retry.1m": 0,
+        "payments.retry.10m": 0
+      }
+    },
+    "balances_match_the_arithmetic": {
+      "pass": true,
+      "accounts": 201,
+      "mismatched": {}
+    },
+    "invariants_I1_to_I4": {
+      "pass": true,
+      "checks": [
+        {
+          "name": "no_duplicate_event_ids",
+          "status": "pass",
+          "duplicates": 0
+        },
+        {
+          "name": "ledger_balances_to_zero",
+          "status": "pass",
+          "value": "0.0000"
+        },
+        {
+          "name": "outbox_fully_published",
+          "status": "pass",
+          "unpublished_older_than_60s": 0
+        },
+        {
+          "name": "no_negative_balances",
+          "status": "pass",
+          "offending_accounts": 0
+        }
+      ]
+    },
+    "drained_without_manual_repair": {
+      "pass": true,
+      "seconds_after_traffic": 6.9
+    },
+    "fault_executed": {
+      "pass": true,
+      "error": null
+    }
+  },
+  "manifest": "docs/results/manifests/chaos-broker-outage-20000-20261112T201538.jsonl.gz"
+}

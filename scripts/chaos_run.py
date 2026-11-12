@@ -11,6 +11,9 @@ Scenarios, one run each:
     db-restart      restart Postgres mid-load: the API may answer 503, never
                     500, and nothing may go to a retry topic or the DLQ (D5)
     relay-kill      SIGKILL the relay mid-load, then start it again
+    db-outage       stop Postgres for 60 s mid-load (compose stop, then
+                    start): the API must answer 503 throughout the outage,
+                    never 500, and nothing may go to a retry topic or the DLQ
 
 Load: CHAOS_EVENTS planned operations (default 20,000). 15% resend an earlier
 idempotency key with the same body; 1% are malformed messages published
@@ -19,7 +22,8 @@ straight to payments.main; new payments spread over many accounts, about
 honouring Retry-After, as a well-behaved client would.
 
 A run PASSES only if, after the pipeline drains with no manual repair:
-    every idempotency key answered 201 has exactly one transaction
+    every idempotency key the client was paid for (201, or a 200 replay when
+    the 201 was lost to the fault) has exactly one transaction
     every payment's event_id has exactly one payment_events row
     the DLQ holds exactly the injected poison messages
     I1 to I4 pass (GET /v1/admin/reconciliation)
@@ -63,13 +67,18 @@ API = "http://localhost:8000"
 BOOTSTRAP = "localhost:19092"
 DSN = "postgresql://payments:payments@localhost:5433/payments"
 PROJECT = "idempotent-payments"
-SCENARIOS = ("consumer-kill", "broker-outage", "db-restart", "relay-kill")
+# db-outage is last so the first four keep the seeds they had in Phase 8.
+SCENARIOS = ("consumer-kill", "broker-outage", "db-restart", "relay-kill", "db-outage")
 RETRY_TOPICS = ("payments.retry.5s", "payments.retry.1m", "payments.retry.10m")
 
 MEMORY_FLOOR_MB = 300
 MEMORY_SAMPLE_SECONDS = 5
 DRAIN_TIMEOUT_SECONDS = 900
-MAX_503_RETRIES = 60
+# A well-behaved client keeps retrying a 503 with the same key. 300 retries
+# at Retry-After: 1 outlast a 60 s database outage with room to spare; 60
+# did not (each 503 comes back in milliseconds).
+MAX_503_RETRIES = 300
+DB_OUTAGE_SECONDS = 60
 
 FUND_MINOR = 10_000_000  # 100,000.00 INR per account
 HOT_FUND_MINOR = 200_000_000
@@ -151,6 +160,7 @@ class Monitor(threading.Thread):
         self.min_available_mb: float | None = None
         self.samples: list[tuple[float, float]] = []
         self.peak_mb: dict[str, float] = {}
+        self.cpu_samples: dict[str, list[float]] = {}  # docker stats CPU %, 100 = one core
 
     @staticmethod
     def _vm_available_mb() -> float | None:
@@ -181,16 +191,15 @@ class Monitor(threading.Thread):
                     log(f"MEMORY GUARD: VM free memory {available:.0f} MB < {MEMORY_FLOOR_MB} MB; aborting")
                     self.abort.set()
             try:
-                out = sh("docker", "stats", "--no-stream", "--format", "{{.Name}} {{.MemUsage}}",
-                         timeout=20)
+                out = sh("docker", "stats", "--no-stream", "--format",
+                         "{{.Name}} {{.CPUPerc}} {{.MemUsage}}", timeout=20)
                 for line in out.splitlines():
-                    name, usage = line.split(" ", 1)
+                    name, cpu, usage = line.split(" ", 2)
                     if not name.startswith(PROJECT):
                         continue
-                    service = re.sub(rf"^{PROJECT}-|-\d+$", "", name)
-                    if name.endswith(tuple(f"-{n}" for n in range(2, 9))):
-                        service += name[name.rindex("-"):]  # consumer-2
+                    service = service_of(name)
                     self.peak_mb[service] = max(self.peak_mb.get(service, 0), self._mib(usage.split()[0]))
+                    self.cpu_samples.setdefault(service, []).append(float(cpu.rstrip("%") or 0))
             except Exception:
                 pass
             self.stop_event.wait(MEMORY_SAMPLE_SECONDS)
@@ -239,6 +248,76 @@ def group_lag(groups=("payments-ledger", "payments-dlq-writer")) -> dict[str, in
         reader.close()
 
 
+# --- CPU, timing and thermal probes ---------------------------------------------------------
+
+
+def service_of(container: str) -> str:
+    service = re.sub(rf"^{PROJECT}-|-\d+$", "", container)
+    if container.endswith(tuple(f"-{n}" for n in range(2, 9))):
+        service += container[container.rindex("-"):]  # consumer-2
+    return service
+
+
+def vm_cpu_seconds() -> tuple[float, float] | None:
+    """(busy, total) CPU seconds of the whole Docker VM since it booted.
+    /proc/stat is not namespaced, so any container shows the VM's."""
+    try:
+        line = sh("docker", "exec", f"{PROJECT}-prometheus-1", "head", "-1", "/proc/stat",
+                  timeout=10).split()
+    except Exception:
+        return None
+    ticks = [int(v) for v in line[1:9]]  # user nice system idle iowait irq softirq steal
+    total = sum(ticks)
+    return (total - ticks[3] - ticks[4]) / 100, total / 100
+
+
+def container_cpu_seconds() -> dict[str, float]:
+    """CPU seconds each container has used, from its own cgroup. A container
+    that restarted starts again from 0."""
+    names = sh("docker", "ps", "--filter", f"label=com.docker.compose.project={PROJECT}",
+               "--format", "{{.Names}}").split()
+
+    def one(name: str):
+        try:
+            out = sh("docker", "exec", name, "cat", "/sys/fs/cgroup/cpu.stat", timeout=10)
+            return service_of(name), int(re.search(r"usage_usec (\d+)", out).group(1)) / 1e6
+        except Exception:
+            return service_of(name), None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return {k: v for k, v in pool.map(one, names) if v is not None}
+
+
+def cpu_delta(before: dict, after: dict) -> dict[str, float | None]:
+    return {k: (round(after[k] - before[k], 1) if k in before and after[k] >= before[k] else None)
+            for k in sorted(after)}
+
+
+def cpu_benchmark() -> dict | None:
+    try:
+        return json.loads(sh(sys.executable, str(ROOT / "scripts" / "cpu_bench.py"), timeout=120))
+    except Exception as exc:
+        return {"error": repr(exc)}
+
+
+def host_state() -> dict:
+    batt = sh("pmset", "-g", "batt", check=False).splitlines()
+    therm = [line.strip() for line in sh("pmset", "-g", "therm", check=False).splitlines()
+             if line.strip()]
+    low_power = re.search(r"lowpowermode\s+(\d)", sh("pmset", "-g", check=False))
+    return {
+        "power_source": batt[0].split("'")[1] if batt and "'" in batt[0] else None,
+        "battery": batt[1].split("\t")[-1].strip() if len(batt) > 1 else None,
+        "low_power_mode": (low_power.group(1) == "1") if low_power else None,
+        "pmset_therm": therm,
+        "load_average": sh("sysctl", "-n", "vm.loadavg", check=False).strip(),
+    }
+
+
+def utc(t: float) -> str:
+    return dt.datetime.fromtimestamp(t, dt.timezone.utc).isoformat(timespec="seconds")
+
+
 # --- setup -------------------------------------------------------------------------------------
 
 
@@ -265,10 +344,19 @@ def create_accounts(count: int, run_id: str) -> tuple[list[str], str]:
 
 
 class Traffic:
-    def __init__(self, plan: list[Op], concurrency: int, monitor: Monitor) -> None:
+    def __init__(self, plan: list[Op], concurrency: int, monitor: Monitor, *,
+                 buckets: int = 8, deadline: float | None = None,
+                 subject_per_op: bool = False) -> None:
         self.plan = plan
         self.concurrency = concurrency
         self.monitor = monitor
+        self.buckets = buckets  # rate-limit subjects per account
+        self.deadline = deadline  # time.monotonic() after which no new op starts
+        # The API rate-limits per token subject (100 a minute). By default a
+        # worker slot keeps its subjects; per op spreads one account's
+        # requests over all `buckets` subjects whatever the concurrency, so
+        # a few clients do not trip the limit on the hot account.
+        self.subject_per_op = subject_per_op
         self.next_index = 0
         self.lock = threading.Lock()
         self.done = 0
@@ -278,7 +366,7 @@ class Traffic:
                                                # must not stall the payment workers
 
     def _token(self, account: str, slot: int) -> str:
-        key = (account, slot % 8)  # several rate-limit buckets per account
+        key = (account, slot % self.buckets)  # several rate-limit buckets per account
         if key not in self.tokens:
             self.tokens[key] = token(f"chaos-{account}-{key[1]}", "client", account_id=account)
         return self.tokens[key]
@@ -314,7 +402,8 @@ class Traffic:
     def _payment(self, op: Op, client: httpx.Client, slot: int) -> None:
         body = {"from_account_id": op.source, "to_account_id": op.destination,
                 "amount_minor": op.amount_minor, "currency": "INR"}
-        headers = {"Authorization": f"Bearer {self._token(op.source, slot)}",
+        subject = op.index if self.subject_per_op else slot
+        headers = {"Authorization": f"Bearer {self._token(op.source, subject)}",
                    "Idempotency-Key": op.key}
         for _ in range(MAX_503_RETRIES + 1):
             started = time.monotonic()
@@ -342,6 +431,8 @@ class Traffic:
         client = httpx.Client(base_url=API, timeout=60)
         try:
             while not self.monitor.abort.is_set():
+                if self.deadline is not None and time.monotonic() >= self.deadline:
+                    return
                 with self.lock:
                     if self.next_index >= len(self.plan):
                         return
@@ -376,6 +467,7 @@ class Fault(threading.Thread):
         self.at = int(len(traffic.plan) * at_fraction)
         self.log: list[tuple[str, float]] = []
         self.error: str | None = None
+        self.containers_during_outage: list[str] = []
 
     def mark(self, what: str) -> None:
         self.log.append((what, time.time()))
@@ -413,6 +505,26 @@ class Fault(threading.Thread):
         self.mark("restart postgres")
         compose("restart", "postgres")
         self.mark("restored")
+
+    def db_outage(self) -> None:
+        self.mark("stop postgres")
+        compose("stop", "postgres")
+        self.mark("stopped")
+        self.containers_during_outage = sh(
+            "docker", "compose", "ps", "--all", "--format", "{{.Service}} {{.State}}").split("\n")
+        time.sleep(DB_OUTAGE_SECONDS)
+        self.mark("start postgres")
+        compose("start", "postgres")
+        self.mark("started")
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            try:
+                with psycopg.connect(DSN, connect_timeout=2) as conn:
+                    conn.execute("SELECT 1")
+                break
+            except psycopg.OperationalError:
+                time.sleep(0.2)
+        self.mark("restored")  # Postgres accepts connections again
 
     def relay_kill(self) -> None:
         self.mark("SIGKILL relay")
@@ -479,16 +591,23 @@ def verify(plan, accounts, hot, poison_ids, since, retry_before, funded) -> dict
         if o.final in (200, 201) and o.payment_id:
             created.setdefault(o.key, set()).add(o.payment_id)
     keys_201 = {o.key for o in payments if any(a[0] == 201 for a in o.attempts)}
+    # A key the client got a payment for: answered 201, or answered only by a
+    # 200 replay because the 201 was lost to the fault (the commit landed,
+    # the connection did not survive to carry the response). Each needs
+    # exactly one transaction, and every transaction must belong to one.
+    keys_paid = {o.key for o in payments if o.final in (200, 201) and o.payment_id}
     split = {k: v for k, v in created.items() if len(v) != 1}
     rows = dict(query("SELECT key::text, transaction_id FROM idempotency_keys "
-                      "WHERE key = ANY(%s::uuid[])", (list(keys_201),)))
-    mismatched = [k for k in keys_201 if rows.get(k) not in created.get(k, set())]
+                      "WHERE key = ANY(%s::uuid[])", (list(keys_paid),)))
+    mismatched = [k for k in keys_paid if rows.get(k) not in created.get(k, set())]
     run_accounts = [*accounts, hot]
     tx_count = query("SELECT count(DISTINCT transaction_id) FROM postings WHERE account_id = ANY(%s)",
                      (run_accounts,))[0][0]
     checks["one_transaction_per_201_key"] = {
-        "pass": not split and not mismatched and tx_count == funded + len(keys_201),
-        "keys_answered_201": len(keys_201), "transactions_for_run_accounts": tx_count,
+        "pass": not split and not mismatched and tx_count == funded + len(keys_paid),
+        "keys_answered_201": len(keys_201),
+        "keys_paid_but_only_answered_by_replay": len(keys_paid - keys_201),
+        "transactions_for_run_accounts": tx_count,
         "funding_transactions": funded, "keys_with_two_payment_ids": len(split),
         "keys_whose_stored_transaction_differs": len(mismatched),
     }
@@ -517,7 +636,7 @@ def verify(plan, accounts, hot, poison_ids, since, retry_before, funded) -> dict
     expected[hot] = Decimal(HOT_FUND_MINOR) / 100
     seen = set()
     for o in payments:
-        if o.key in keys_201 and o.key not in seen:
+        if o.key in keys_paid and o.key not in seen:
             seen.add(o.key)
             expected[o.source] -= Decimal(o.amount_minor) / 100
             expected[o.destination] += Decimal(o.amount_minor) / 100
@@ -545,11 +664,47 @@ def percentile(values, q):
     return round(values[min(len(values) - 1, int(round(q * (len(values) - 1))))], 1)
 
 
-def run_scenario(scenario: str, events: int, concurrency: int, seed: int, accounts_n: int) -> dict:
+def outage_checks(fault: Fault, plan: list[Op]) -> dict:
+    """db-outage only: every request made while Postgres was stopped got 503,
+    and how long after Postgres came back the API created a payment again."""
+    marks = dict(fault.log)
+    stopped, starting, restored = marks.get("stopped"), marks.get("start postgres"), marks.get("restored")
+    if None in (stopped, starting, restored):
+        return {"api_503_throughout_outage": {"pass": False, "error": "outage marks missing",
+                                              "marks": list(marks)}}
+    attempts = [a for o in plan if o.kind != "poison" for a in o.attempts]
+    began = lambda a: a[2] - a[1] / 1000  # noqa: E731
+    inside = [a for a in attempts if began(a) >= stopped and a[2] <= starting]
+    spanning = [a for a in attempts if began(a) < stopped <= a[2]]
+    statuses = collections.Counter(str(a[0]) for a in inside)
+    created_after = [a[2] for a in attempts if a[0] == 201 and began(a) >= restored]
+    first_201 = min(created_after) if created_after else None
+    return {
+        "api_503_throughout_outage": {
+            "pass": bool(inside) and set(statuses) == {"503"},
+            "outage_seconds": round(starting - stopped, 1),
+            "requests_during_outage": len(inside), "statuses_during_outage": dict(statuses),
+            "in_flight_when_postgres_stopped": dict(collections.Counter(str(a[0]) for a in spanning)),
+            "containers_during_outage": [c for c in fault.containers_during_outage if c],
+        },
+        "api_recovered_after_postgres_returned": {
+            "pass": first_201 is not None,
+            "postgres_start_to_accepting_s": round(restored - marks["started"], 1),
+            "first_201_after_postgres_accepting_s": (round(first_201 - restored, 2)
+                                                     if first_201 else None),
+        },
+    }
+
+
+def run_scenario(scenario: str, events: int, concurrency: int, seed: int, accounts_n: int,
+                 round_no: int | None = None) -> dict:
     run_id = f"{scenario}-{events}-{time.strftime('%Y%m%dT%H%M%S')}"
     log(f"=== {run_id} ===")
+    started_at = time.time()
     rng = random.Random(seed)
+    host_before = host_state()
     preflight(scenario)
+    bench_before = cpu_benchmark()
 
     accounts, hot = create_accounts(accounts_n, run_id)
     funded = accounts_n + 1
@@ -565,7 +720,11 @@ def run_scenario(scenario: str, events: int, concurrency: int, seed: int, accoun
     fault.start()
     log(f"traffic: {events} ops, {accounts_n} accounts + hot, {len(poison_ids)} poison, "
         f"fault at op {fault.at}")
+    cpu_before, vm_before, client_before = container_cpu_seconds(), vm_cpu_seconds(), time.process_time()
+    traffic_started = time.time()
     traffic_seconds = traffic.run()
+    traffic_ended = time.time()
+    cpu_after, vm_after, client_after = container_cpu_seconds(), vm_cpu_seconds(), time.process_time()
     fault.join(timeout=180)
     log(f"traffic done in {traffic_seconds:.0f}s; draining")
 
@@ -576,6 +735,9 @@ def run_scenario(scenario: str, events: int, concurrency: int, seed: int, accoun
     monitor.join(timeout=30)
     if scenario == "consumer-kill":
         compose("up", "-d", "--no-deps", "--scale", "consumer=1", "consumer")
+    bench_after = cpu_benchmark()  # the stack is idle again: drained
+    host_after = host_state()
+    ended_at = time.time()
 
     payments = [o for o in plan if o.kind != "poison"]
     attempts = [a for o in payments for a in o.attempts]
@@ -592,12 +754,30 @@ def run_scenario(scenario: str, events: int, concurrency: int, seed: int, accoun
                                                    "seconds_after_traffic": round(drain_seconds, 1)}
         checks["fault_executed"] = {"pass": fault.error is None and bool(fault.log),
                                     "error": fault.error}
+        if scenario == "db-outage":
+            checks.update(outage_checks(fault, plan))
         verdict = "PASS" if all(c["pass"] for c in checks.values()) else "FAILED"
 
     result = {
         "run": run_id, "scenario": scenario, "verdict": verdict, "seed": seed,
-        "events_planned": events, "concurrency": concurrency,
+        "round": round_no, "events_planned": events, "concurrency": concurrency,
         "machine": machine(),
+        "timing": {"started_at": utc(started_at), "traffic_started_at": utc(traffic_started),
+                   "traffic_ended_at": utc(traffic_ended), "ended_at": utc(ended_at)},
+        "cpu": {
+            "container_cpu_seconds_during_traffic": cpu_delta(cpu_before, cpu_after),
+            "vm_busy_cpu_seconds_during_traffic": (round(vm_after[0] - vm_before[0], 1)
+                                                   if vm_before and vm_after else None),
+            "vm_cpu_utilisation_during_traffic": (
+                round((vm_after[0] - vm_before[0]) / (vm_after[1] - vm_before[1]), 3)
+                if vm_before and vm_after else None),
+            "vm_busy_cpu_seconds_per_1000_requests": (
+                round((vm_after[0] - vm_before[0]) * 1000 / max(1, len(attempts)), 2)
+                if vm_before and vm_after else None),
+            "load_client_cpu_seconds": round(client_after - client_before, 1),
+        },
+        "thermal": {"cpu_benchmark_before": bench_before, "cpu_benchmark_after": bench_after,
+                    "host_before": host_before, "host_after": host_after},
         "load": {
             "payment_requests": sum(o.kind == "payment" for o in plan),
             "resends_same_key_same_body": sum(o.kind == "resend" for o in plan),
@@ -623,6 +803,7 @@ def run_scenario(scenario: str, events: int, concurrency: int, seed: int, accoun
                                for w, t in fault.log],
             "vm_min_available_mb": round(monitor.min_available_mb or 0),
             "peak_memory_mb": {k: round(v) for k, v in sorted(monitor.peak_mb.items())},
+            "peak_cpu_percent": {k: round(max(v)) for k, v in sorted(monitor.cpu_samples.items())},
         },
         "checks": checks,
     }
@@ -699,13 +880,20 @@ def main() -> int:
     parser.add_argument("--concurrency", type=int, default=int(os.environ.get("CHAOS_CONCURRENCY", 16)))
     parser.add_argument("--accounts", type=int, default=200)
     parser.add_argument("--seed", type=int, default=int(os.environ.get("CHAOS_SEED", 8)))
+    parser.add_argument("--round", type=int, default=None,
+                        help="label for consecutive full runs (stored in the JSON)")
+    parser.add_argument("--stop-on-failure", action="store_true",
+                        help="stop at the first run that is not PASS")
     args = parser.parse_args()
 
     scenarios = SCENARIOS if args.scenario == "all" else (args.scenario,)
     results = []
     for i, scenario in enumerate(scenarios):
-        results.append(run_scenario(scenario, args.events, args.concurrency, args.seed + i,
-                                    args.accounts))
+        results.append(run_scenario(scenario, args.events, args.concurrency,
+                                    args.seed + SCENARIOS.index(scenario), args.accounts, args.round))
+        if args.stop_on_failure and results[-1]["verdict"] != "PASS":
+            log(f"{scenario} is {results[-1]['verdict']}; stopping")
+            break
     print()
     print(table(results))
     for r in results:

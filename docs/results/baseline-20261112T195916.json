@@ -1,0 +1,668 @@
+{
+  "run": "baseline-20261112T195916",
+  "kind": "steady-state baseline, no faults",
+  "machine": {
+    "host": "MacBook Air, Apple M2, 8 GB",
+    "host_cpu": "Apple M2",
+    "host_memory_gb": 8,
+    "docker_vm_memory_gb": 3.83,
+    "docker_vm_cpus": 8
+  },
+  "timing": {
+    "started_at": "2026-11-12T14:29:16+00:00",
+    "ended_at": "2026-11-12T14:40:55+00:00"
+  },
+  "load": {
+    "mix": "15% same-key resends, 1% poison to payments.main, ~10% of new payments on one hot account",
+    "accounts": 201,
+    "seconds_per_step": 120,
+    "consumers": 1,
+    "rate_limit_subjects_per_account": 64,
+    "subjects": "rotated per request, so the client never meets the 100-a-minute per-subject limit",
+    "client_retries": "503 and 409 retried with the same key after Retry-After, each attempt counted"
+  },
+  "slo": {
+    "p99_ms_below": 500,
+    "errors": 0
+  },
+  "sustained": {
+    "concurrency": 4,
+    "requests_per_s": 205.2,
+    "payments_created_per_s": 174.9,
+    "p99_ms": 47.8
+  },
+  "steps": [
+    {
+      "concurrency": 4,
+      "started_at": "2026-11-12T14:29:46+00:00",
+      "ended_at": "2026-11-12T14:31:46+00:00",
+      "seconds": 119.7,
+      "requests": 24561,
+      "requests_per_s": 205.2,
+      "payments_created_per_s": 174.9,
+      "latency_ms": {
+        "p50": 18.5,
+        "p95": 32.2,
+        "p99": 47.8,
+        "max": 128.8
+      },
+      "statuses": {
+        "200": 3624,
+        "201": 20937
+      },
+      "errors": 0,
+      "poison_published": 272,
+      "within_slo": true,
+      "cpu": {
+        "container_cores": {
+          "api": 1.09,
+          "consumer": 0.24,
+          "dlq-writer": 0.03,
+          "grafana": 0.0,
+          "jaeger": 0.06,
+          "postgres": 0.32,
+          "prometheus": 0.0,
+          "reconciliation": 0.03,
+          "redpanda": 0.11,
+          "relay": 0.3,
+          "retry-10m": 0.02,
+          "retry-1m": 0.02,
+          "retry-5s": 0.02
+        },
+        "vm_cpu_utilisation": 0.313,
+        "vm_busy_cores": 2.51,
+        "load_client_cores": 0.2,
+        "peak_cpu_percent_docker_stats": {
+          "api": 109,
+          "consumer": 48,
+          "dlq-writer": 1,
+          "grafana": 2,
+          "jaeger": 25,
+          "postgres": 43,
+          "prometheus": 1,
+          "reconciliation": 1,
+          "redpanda": 14,
+          "relay": 32,
+          "retry-10m": 20,
+          "retry-1m": 20,
+          "retry-5s": 20
+        }
+      },
+      "postgres_and_pool": {
+        "samples": 119,
+        "active_backends": {
+          "mean": 0.36,
+          "max": 4
+        },
+        "connections": {
+          "mean": 22.0,
+          "max": 22
+        },
+        "api_pool_in_use": {
+          "mean": 3.1,
+          "max": 4
+        },
+        "api_pool_at_capacity_share": 0.0,
+        "notify_lock_waiting": {
+          "mean": 0.01,
+          "max": 1
+        },
+        "row_lock_waiting": {
+          "mean": 0.02,
+          "max": 1
+        },
+        "active_backends_by_wait": {
+          "Client:ClientRead": 0.15,
+          "IO:WALSync": 0.14,
+          "CPU:running": 0.13,
+          "Lock:object": 0.01,
+          "Lock:transactionid": 0.01
+        }
+      },
+      "prometheus": {
+        "window_seconds": 119,
+        "process_cpu_cores_by_job": {
+          "api": 1.029,
+          "consumer": 0.212,
+          "dlq-writer": 0.005,
+          "prometheus": 0.003,
+          "reconciliation": 0.002,
+          "relay": 0.261,
+          "retry-10m": 0.001,
+          "retry-1m": 0.001,
+          "retry-5s": 0.001
+        },
+        "api_server_side_p50_s": 0.017,
+        "api_server_side_p99_s": 0.049,
+        "payments_created_per_s": 168.794,
+        "relay_published_per_s": 161.953,
+        "consumer_applied_per_s": 169.153,
+        "outbox_unpublished_max": 3.0,
+        "outbox_publish_delay_recent_p95_max_s": 0.03,
+        "consumer_lag_max": 2.0,
+        "api_pool_in_use_max_scraped": 4.0
+      },
+      "pipeline_at_step_end": {
+        "outbox_unpublished": 0,
+        "consumer_lag": 0,
+        "drain_seconds": 0.1
+      },
+      "vm_min_available_mb": 1335,
+      "memory_guard_tripped": false
+    },
+    {
+      "concurrency": 8,
+      "started_at": "2026-11-12T14:31:59+00:00",
+      "ended_at": "2026-11-12T14:33:59+00:00",
+      "seconds": 119.6,
+      "requests": 21574,
+      "requests_per_s": 180.4,
+      "payments_created_per_s": 153.4,
+      "latency_ms": {
+        "p50": 42.7,
+        "p95": 72.1,
+        "p99": 99.1,
+        "max": 236.4
+      },
+      "statuses": {
+        "200": 3233,
+        "201": 18341
+      },
+      "errors": 0,
+      "poison_published": 212,
+      "within_slo": true,
+      "cpu": {
+        "container_cores": {
+          "api": 1.14,
+          "consumer": 0.23,
+          "dlq-writer": 0.03,
+          "grafana": 0.0,
+          "jaeger": 0.06,
+          "postgres": 0.37,
+          "prometheus": 0.01,
+          "reconciliation": 0.03,
+          "redpanda": 0.11,
+          "relay": 0.29,
+          "retry-10m": 0.02,
+          "retry-1m": 0.02,
+          "retry-5s": 0.02
+        },
+        "vm_cpu_utilisation": 0.321,
+        "vm_busy_cores": 2.56,
+        "load_client_cores": 0.19,
+        "peak_cpu_percent_docker_stats": {
+          "api": 117,
+          "consumer": 24,
+          "dlq-writer": 29,
+          "grafana": 0,
+          "jaeger": 51,
+          "postgres": 40,
+          "prometheus": 1,
+          "reconciliation": 0,
+          "redpanda": 16,
+          "relay": 29,
+          "retry-10m": 25,
+          "retry-1m": 24,
+          "retry-5s": 24
+        }
+      },
+      "postgres_and_pool": {
+        "samples": 119,
+        "active_backends": {
+          "mean": 0.58,
+          "max": 9
+        },
+        "connections": {
+          "mean": 22.0,
+          "max": 22
+        },
+        "api_pool_in_use": {
+          "mean": 5.82,
+          "max": 8
+        },
+        "api_pool_at_capacity_share": 0.0,
+        "notify_lock_waiting": {
+          "mean": 0.07,
+          "max": 7
+        },
+        "row_lock_waiting": {
+          "mean": 0.12,
+          "max": 2
+        },
+        "active_backends_by_wait": {
+          "Lock:transactionid": 0.14,
+          "IO:WALSync": 0.13,
+          "CPU:running": 0.12,
+          "Lock:object": 0.07,
+          "Client:ClientRead": 0.05,
+          "IO:DataFileRead": 0.02,
+          "LWLock:WALWrite": 0.02,
+          "IO:DataFileWrite": 0.01,
+          "IO:WALWrite": 0.01
+        }
+      },
+      "prometheus": {
+        "window_seconds": 119,
+        "process_cpu_cores_by_job": {
+          "api": 1.11,
+          "consumer": 0.205,
+          "dlq-writer": 0.005,
+          "prometheus": 0.003,
+          "reconciliation": 0.003,
+          "relay": 0.251,
+          "retry-10m": 0.001,
+          "retry-1m": 0.001,
+          "retry-5s": 0.001
+        },
+        "api_server_side_p50_s": 0.038,
+        "api_server_side_p99_s": 0.099,
+        "payments_created_per_s": 152.4,
+        "relay_published_per_s": 146.575,
+        "consumer_applied_per_s": 152.785,
+        "outbox_unpublished_max": 1.0,
+        "outbox_publish_delay_recent_p95_max_s": 0.042,
+        "consumer_lag_max": 2.0,
+        "api_pool_in_use_max_scraped": 8.0
+      },
+      "pipeline_at_step_end": {
+        "outbox_unpublished": 0,
+        "consumer_lag": 0,
+        "drain_seconds": 0.1
+      },
+      "vm_min_available_mb": 1295,
+      "memory_guard_tripped": false
+    },
+    {
+      "concurrency": 16,
+      "started_at": "2026-11-12T14:34:12+00:00",
+      "ended_at": "2026-11-12T14:36:12+00:00",
+      "seconds": 119.7,
+      "requests": 19345,
+      "requests_per_s": 161.7,
+      "payments_created_per_s": 137.2,
+      "latency_ms": {
+        "p50": 96.6,
+        "p95": 160.0,
+        "p99": 205.2,
+        "max": 493.8
+      },
+      "statuses": {
+        "200": 2925,
+        "201": 16420
+      },
+      "errors": 0,
+      "poison_published": 174,
+      "within_slo": true,
+      "cpu": {
+        "container_cores": {
+          "api": 1.16,
+          "consumer": 0.23,
+          "dlq-writer": 0.03,
+          "grafana": 0.0,
+          "jaeger": 0.06,
+          "postgres": 0.4,
+          "prometheus": 0.01,
+          "reconciliation": 0.03,
+          "redpanda": 0.11,
+          "relay": 0.28,
+          "retry-10m": 0.03,
+          "retry-1m": 0.03,
+          "retry-5s": 0.03
+        },
+        "vm_cpu_utilisation": 0.328,
+        "vm_busy_cores": 2.61,
+        "load_client_cores": 0.18,
+        "peak_cpu_percent_docker_stats": {
+          "api": 141,
+          "consumer": 47,
+          "dlq-writer": 1,
+          "grafana": 3,
+          "jaeger": 33,
+          "postgres": 40,
+          "prometheus": 5,
+          "reconciliation": 26,
+          "redpanda": 16,
+          "relay": 49,
+          "retry-10m": 30,
+          "retry-1m": 27,
+          "retry-5s": 27
+        }
+      },
+      "postgres_and_pool": {
+        "samples": 120,
+        "active_backends": {
+          "mean": 1.27,
+          "max": 6
+        },
+        "connections": {
+          "mean": 22.0,
+          "max": 22
+        },
+        "api_pool_in_use": {
+          "mean": 11.06,
+          "max": 16
+        },
+        "api_pool_at_capacity_share": 0.0,
+        "notify_lock_waiting": {
+          "mean": 0.02,
+          "max": 2
+        },
+        "row_lock_waiting": {
+          "mean": 0.79,
+          "max": 5
+        },
+        "active_backends_by_wait": {
+          "Lock:transactionid": 0.68,
+          "CPU:running": 0.16,
+          "IO:WALSync": 0.15,
+          "Lock:tuple": 0.1,
+          "Client:ClientRead": 0.03,
+          "LWLock:WALWrite": 0.02,
+          "Lock:object": 0.02
+        }
+      },
+      "prometheus": {
+        "window_seconds": 119,
+        "process_cpu_cores_by_job": {
+          "api": 1.061,
+          "consumer": 0.191,
+          "dlq-writer": 0.005,
+          "prometheus": 0.003,
+          "reconciliation": 0.003,
+          "relay": 0.255,
+          "retry-10m": 0.001,
+          "retry-1m": 0.001,
+          "retry-5s": 0.002
+        },
+        "api_server_side_p50_s": 0.086,
+        "api_server_side_p99_s": 0.247,
+        "payments_created_per_s": 125.228,
+        "relay_published_per_s": 133.245,
+        "consumer_applied_per_s": 125.534,
+        "outbox_unpublished_max": 2.0,
+        "outbox_publish_delay_recent_p95_max_s": 0.093,
+        "consumer_lag_max": 4.0,
+        "api_pool_in_use_max_scraped": 16.0
+      },
+      "pipeline_at_step_end": {
+        "outbox_unpublished": 0,
+        "consumer_lag": 0,
+        "drain_seconds": 0.1
+      },
+      "vm_min_available_mb": 1319,
+      "memory_guard_tripped": false
+    },
+    {
+      "concurrency": 32,
+      "started_at": "2026-11-12T14:36:26+00:00",
+      "ended_at": "2026-11-12T14:38:25+00:00",
+      "seconds": 119.7,
+      "requests": 19466,
+      "requests_per_s": 162.6,
+      "payments_created_per_s": 138.2,
+      "latency_ms": {
+        "p50": 177.1,
+        "p95": 408.0,
+        "p99": 612.7,
+        "max": 1086.6
+      },
+      "statuses": {
+        "200": 2915,
+        "201": 16551
+      },
+      "errors": 0,
+      "poison_published": 201,
+      "within_slo": false,
+      "cpu": {
+        "container_cores": {
+          "api": 1.17,
+          "consumer": 0.23,
+          "dlq-writer": 0.03,
+          "grafana": 0.0,
+          "jaeger": 0.06,
+          "postgres": 0.46,
+          "prometheus": 0.01,
+          "reconciliation": 0.03,
+          "redpanda": 0.11,
+          "relay": 0.29,
+          "retry-10m": 0.03,
+          "retry-1m": 0.03,
+          "retry-5s": 0.03
+        },
+        "vm_cpu_utilisation": 0.334,
+        "vm_busy_cores": 2.65,
+        "load_client_cores": 0.18,
+        "peak_cpu_percent_docker_stats": {
+          "api": 139,
+          "consumer": 48,
+          "dlq-writer": 1,
+          "grafana": 2,
+          "jaeger": 38,
+          "postgres": 70,
+          "prometheus": 8,
+          "reconciliation": 27,
+          "redpanda": 15,
+          "relay": 29,
+          "retry-10m": 1,
+          "retry-1m": 9,
+          "retry-5s": 9
+        }
+      },
+      "postgres_and_pool": {
+        "samples": 120,
+        "active_backends": {
+          "mean": 5.01,
+          "max": 15
+        },
+        "connections": {
+          "mean": 30.93,
+          "max": 31
+        },
+        "api_pool_in_use": {
+          "mean": 21.92,
+          "max": 25
+        },
+        "api_pool_at_capacity_share": 0.275,
+        "notify_lock_waiting": {
+          "mean": 0.01,
+          "max": 1
+        },
+        "row_lock_waiting": {
+          "mean": 4.62,
+          "max": 14
+        },
+        "active_backends_by_wait": {
+          "Lock:transactionid": 2.33,
+          "Lock:tuple": 2.27,
+          "CPU:running": 0.18,
+          "IO:WALSync": 0.15,
+          "Client:ClientRead": 0.08,
+          "Lock:object": 0.01,
+          "IO:DataFileRead": 0.01
+        }
+      },
+      "prometheus": {
+        "window_seconds": 119,
+        "process_cpu_cores_by_job": {
+          "api": 1.096,
+          "consumer": 0.201,
+          "dlq-writer": 0.005,
+          "prometheus": 0.003,
+          "reconciliation": 0.003,
+          "relay": 0.243,
+          "retry-10m": 0.002,
+          "retry-1m": 0.002,
+          "retry-5s": 0.001
+        },
+        "api_server_side_p50_s": 0.175,
+        "api_server_side_p99_s": 0.819,
+        "payments_created_per_s": 130.953,
+        "relay_published_per_s": 124.908,
+        "consumer_applied_per_s": 131.364,
+        "outbox_unpublished_max": 2.0,
+        "outbox_publish_delay_recent_p95_max_s": 0.201,
+        "consumer_lag_max": 3.0,
+        "api_pool_in_use_max_scraped": 25.0
+      },
+      "pipeline_at_step_end": {
+        "outbox_unpublished": 0,
+        "consumer_lag": 0,
+        "drain_seconds": 0.1
+      },
+      "vm_min_available_mb": 1282,
+      "memory_guard_tripped": false
+    },
+    {
+      "concurrency": 64,
+      "started_at": "2026-11-12T14:38:39+00:00",
+      "ended_at": "2026-11-12T14:40:39+00:00",
+      "seconds": 119.9,
+      "requests": 18632,
+      "requests_per_s": 155.4,
+      "payments_created_per_s": 132.5,
+      "latency_ms": {
+        "p50": 377.9,
+        "p95": 726.3,
+        "p99": 937.1,
+        "max": 1466.2
+      },
+      "statuses": {
+        "200": 2749,
+        "201": 15883
+      },
+      "errors": 0,
+      "poison_published": 194,
+      "within_slo": false,
+      "cpu": {
+        "container_cores": {
+          "api": 1.16,
+          "consumer": 0.23,
+          "dlq-writer": 0.03,
+          "grafana": 0.0,
+          "jaeger": 0.06,
+          "postgres": 0.48,
+          "prometheus": 0.01,
+          "reconciliation": 0.03,
+          "redpanda": 0.11,
+          "relay": 0.28,
+          "retry-10m": 0.03,
+          "retry-1m": 0.03,
+          "retry-5s": 0.03
+        },
+        "vm_cpu_utilisation": 0.336,
+        "vm_busy_cores": 2.67,
+        "load_client_cores": 0.18,
+        "peak_cpu_percent_docker_stats": {
+          "api": 137,
+          "consumer": 49,
+          "dlq-writer": 1,
+          "grafana": 1,
+          "jaeger": 33,
+          "postgres": 188,
+          "prometheus": 2,
+          "reconciliation": 27,
+          "redpanda": 17,
+          "relay": 28,
+          "retry-10m": 1,
+          "retry-1m": 1,
+          "retry-5s": 0
+        }
+      },
+      "postgres_and_pool": {
+        "samples": 119,
+        "active_backends": {
+          "mean": 7.25,
+          "max": 16
+        },
+        "connections": {
+          "mean": 31.0,
+          "max": 31
+        },
+        "api_pool_in_use": {
+          "mean": 24.51,
+          "max": 25
+        },
+        "api_pool_at_capacity_share": 0.597,
+        "notify_lock_waiting": {
+          "mean": 0.0,
+          "max": 0
+        },
+        "row_lock_waiting": {
+          "mean": 6.8,
+          "max": 16
+        },
+        "active_backends_by_wait": {
+          "Lock:tuple": 3.69,
+          "Lock:transactionid": 3.13,
+          "CPU:running": 0.21,
+          "Client:ClientRead": 0.15,
+          "IO:WALSync": 0.08,
+          "IO:DataFileRead": 0.02,
+          "LWLock:WALWrite": 0.01
+        }
+      },
+      "prometheus": {
+        "window_seconds": 119,
+        "process_cpu_cores_by_job": {
+          "api": 1.131,
+          "consumer": 0.204,
+          "dlq-writer": 0.005,
+          "prometheus": 0.003,
+          "reconciliation": 0.003,
+          "relay": 0.25,
+          "retry-10m": 0.001,
+          "retry-1m": 0.001,
+          "retry-5s": 0.002
+        },
+        "api_server_side_p50_s": 0.389,
+        "api_server_side_p99_s": 0.986,
+        "payments_created_per_s": 129.025,
+        "relay_published_per_s": 124.668,
+        "consumer_applied_per_s": 129.449,
+        "outbox_unpublished_max": 2.0,
+        "outbox_publish_delay_recent_p95_max_s": 0.392,
+        "consumer_lag_max": 3.0,
+        "api_pool_in_use_max_scraped": 25.0
+      },
+      "pipeline_at_step_end": {
+        "outbox_unpublished": 0,
+        "consumer_lag": 0,
+        "drain_seconds": 0.1
+      },
+      "vm_min_available_mb": 1264,
+      "memory_guard_tripped": false
+    }
+  ],
+  "thermal": {
+    "cpu_benchmark_before": {
+      "single_thread_s": 0.171,
+      "eight_processes_s": 1.157
+    },
+    "cpu_benchmark_after": {
+      "single_thread_s": 0.171,
+      "eight_processes_s": 1.545
+    },
+    "host_before": {
+      "power_source": "AC Power",
+      "battery": "82%; charging; (no estimate) present: true",
+      "low_power_mode": false,
+      "pmset_therm": [
+        "Note: No thermal warning level has been recorded",
+        "Note: No performance warning level has been recorded",
+        "Note: No CPU power status has been recorded"
+      ],
+      "load_average": "{ 4.90 4.77 4.20 }"
+    },
+    "host_after": {
+      "power_source": "AC Power",
+      "battery": "81%; charging; 3:22 remaining present: true",
+      "low_power_mode": false,
+      "pmset_therm": [
+        "Note: No thermal warning level has been recorded",
+        "Note: No performance warning level has been recorded",
+        "Note: No CPU power status has been recorded"
+      ],
+      "load_average": "{ 5.16 5.03 4.64 }"
+    }
+  }
+}

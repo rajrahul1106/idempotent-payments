@@ -1,0 +1,262 @@
+{
+  "run": "db-outage-3000-20261112T201120",
+  "scenario": "db-outage",
+  "verdict": "PASS",
+  "seed": 12,
+  "round": null,
+  "events_planned": 3000,
+  "concurrency": 16,
+  "machine": {
+    "host": "MacBook Air, Apple M2, 8 GB",
+    "host_cpu": "Apple M2",
+    "host_memory_gb": 8,
+    "docker_vm_memory_gb": 3.83,
+    "docker_vm_cpus": 8
+  },
+  "timing": {
+    "started_at": "2026-11-12T14:41:20+00:00",
+    "traffic_started_at": "2026-11-12T14:41:29+00:00",
+    "traffic_ended_at": "2026-11-12T14:42:48+00:00",
+    "ended_at": "2026-11-12T14:42:51+00:00"
+  },
+  "cpu": {
+    "container_cpu_seconds_during_traffic": {
+      "api": 25.1,
+      "consumer": 5.3,
+      "dlq-writer": 1.8,
+      "grafana": 0.1,
+      "jaeger": 1.5,
+      "postgres": null,
+      "prometheus": 0.6,
+      "reconciliation": 1.9,
+      "redpanda": 3.4,
+      "relay": 6.0,
+      "retry-10m": 1.7,
+      "retry-1m": 1.8,
+      "retry-5s": 1.8
+    },
+    "vm_busy_cpu_seconds_during_traffic": 70.9,
+    "vm_cpu_utilisation_during_traffic": 0.112,
+    "vm_busy_cpu_seconds_per_1000_requests": 18.05,
+    "load_client_cpu_seconds": 4.6
+  },
+  "thermal": {
+    "cpu_benchmark_before": {
+      "single_thread_s": 0.169,
+      "eight_processes_s": 1.171
+    },
+    "cpu_benchmark_after": {
+      "single_thread_s": 0.169,
+      "eight_processes_s": 1.297
+    },
+    "host_before": {
+      "power_source": "AC Power",
+      "battery": "81%; charging; 3:12 remaining present: true",
+      "low_power_mode": false,
+      "pmset_therm": [
+        "Note: No thermal warning level has been recorded",
+        "Note: No performance warning level has been recorded",
+        "Note: No CPU power status has been recorded"
+      ],
+      "load_average": "{ 4.06 4.78 4.57 }"
+    },
+    "host_after": {
+      "power_source": "AC Power",
+      "battery": "81%; charging; 3:02 remaining present: true",
+      "low_power_mode": false,
+      "pmset_therm": [
+        "Note: No thermal warning level has been recorded",
+        "Note: No performance warning level has been recorded",
+        "Note: No CPU power status has been recorded"
+      ],
+      "load_average": "{ 7.26 5.32 4.77 }"
+    }
+  },
+  "load": {
+    "payment_requests": 2534,
+    "resends_same_key_same_body": 433,
+    "poison_published": 33,
+    "hot_account_share": 0.098,
+    "accounts": 201
+  },
+  "results": {
+    "traffic_seconds": 78.7,
+    "throughput_requests_per_s": 49.9,
+    "throughput_payments_created_per_s": 32.2,
+    "latency_ms": {
+      "p50": 77.8,
+      "p95": 144.5,
+      "p99": 205.3
+    },
+    "http_attempt_statuses": {
+      "201": 2534,
+      "200": 433,
+      "503": 960
+    },
+    "final_statuses": {
+      "201": 2534,
+      "200": 433
+    },
+    "count_503": 960,
+    "window_503_seconds": 60.9,
+    "recovery_seconds_after_fault": 0.0,
+    "drain_seconds_after_traffic": 0.1,
+    "fault_timeline": [
+      [
+        "stop postgres",
+        "2026-11-12T14:41:34.014061+00:00"
+      ],
+      [
+        "stopped",
+        "2026-11-12T14:41:34.918619+00:00"
+      ],
+      [
+        "start postgres",
+        "2026-11-12T14:42:35.054104+00:00"
+      ],
+      [
+        "started",
+        "2026-11-12T14:42:35.593517+00:00"
+      ],
+      [
+        "restored",
+        "2026-11-12T14:42:35.832313+00:00"
+      ]
+    ],
+    "vm_min_available_mb": 1274,
+    "peak_memory_mb": {
+      "api": 113,
+      "consumer": 73,
+      "dlq-writer": 66,
+      "grafana": 89,
+      "jaeger": 409,
+      "postgres": 304,
+      "prometheus": 84,
+      "reconciliation": 67,
+      "redpanda": 435,
+      "relay": 69,
+      "retry-10m": 67,
+      "retry-1m": 79,
+      "retry-5s": 79
+    },
+    "peak_cpu_percent": {
+      "api": 134,
+      "consumer": 43,
+      "dlq-writer": 2,
+      "grafana": 1,
+      "jaeger": 3,
+      "postgres": 33,
+      "prometheus": 2,
+      "reconciliation": 17,
+      "redpanda": 16,
+      "relay": 41,
+      "retry-10m": 1,
+      "retry-1m": 18,
+      "retry-5s": 19
+    }
+  },
+  "checks": {
+    "zero_500_responses": {
+      "pass": true,
+      "500s": 0
+    },
+    "one_transaction_per_201_key": {
+      "pass": true,
+      "keys_answered_201": 2534,
+      "keys_paid_but_only_answered_by_replay": 0,
+      "transactions_for_run_accounts": 2735,
+      "funding_transactions": 201,
+      "keys_with_two_payment_ids": 0,
+      "keys_whose_stored_transaction_differs": 0
+    },
+    "one_payment_events_row_per_event": {
+      "pass": true,
+      "events": 2534,
+      "rows": 2534
+    },
+    "dlq_is_exactly_the_poison": {
+      "pass": true,
+      "injected": 33,
+      "dlq_rows": 33,
+      "unexpected": 0,
+      "missing": 0
+    },
+    "nothing_sent_to_retry_topics": {
+      "pass": true,
+      "messages": {
+        "payments.retry.5s": 0,
+        "payments.retry.1m": 0,
+        "payments.retry.10m": 0
+      }
+    },
+    "balances_match_the_arithmetic": {
+      "pass": true,
+      "accounts": 201,
+      "mismatched": {}
+    },
+    "invariants_I1_to_I4": {
+      "pass": true,
+      "checks": [
+        {
+          "name": "no_duplicate_event_ids",
+          "status": "pass",
+          "duplicates": 0
+        },
+        {
+          "name": "ledger_balances_to_zero",
+          "status": "pass",
+          "value": "0.0000"
+        },
+        {
+          "name": "outbox_fully_published",
+          "status": "pass",
+          "unpublished_older_than_60s": 0
+        },
+        {
+          "name": "no_negative_balances",
+          "status": "pass",
+          "offending_accounts": 0
+        }
+      ]
+    },
+    "drained_without_manual_repair": {
+      "pass": true,
+      "seconds_after_traffic": 0.1
+    },
+    "fault_executed": {
+      "pass": true,
+      "error": null
+    },
+    "api_503_throughout_outage": {
+      "pass": true,
+      "outage_seconds": 60.1,
+      "requests_during_outage": 930,
+      "statuses_during_outage": {
+        "503": 930
+      },
+      "in_flight_when_postgres_stopped": {},
+      "containers_during_outage": [
+        "api running",
+        "consumer running",
+        "dlq-writer running",
+        "grafana running",
+        "jaeger running",
+        "postgres exited",
+        "prometheus running",
+        "reconciliation running",
+        "redpanda running",
+        "relay running",
+        "retry-10m running",
+        "retry-1m running",
+        "retry-5s running",
+        "topics exited"
+      ]
+    },
+    "api_recovered_after_postgres_returned": {
+      "pass": true,
+      "postgres_start_to_accepting_s": 0.2,
+      "first_201_after_postgres_accepting_s": 0.19
+    }
+  },
+  "manifest": "docs/results/manifests/chaos-db-outage-3000-20261112T201120.jsonl.gz"
+}

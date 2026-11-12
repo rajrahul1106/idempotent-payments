@@ -1,0 +1,221 @@
+{
+  "run": "consumer-kill-20000-20261112T201318",
+  "scenario": "consumer-kill",
+  "verdict": "PASS",
+  "seed": 8,
+  "round": 1,
+  "events_planned": 20000,
+  "concurrency": 16,
+  "machine": {
+    "host": "MacBook Air, Apple M2, 8 GB",
+    "host_cpu": "Apple M2",
+    "host_memory_gb": 8,
+    "docker_vm_memory_gb": 3.83,
+    "docker_vm_cpus": 8
+  },
+  "timing": {
+    "started_at": "2026-11-12T14:43:18+00:00",
+    "traffic_started_at": "2026-11-12T14:43:41+00:00",
+    "traffic_ended_at": "2026-11-12T14:45:30+00:00",
+    "ended_at": "2026-11-12T14:45:34+00:00"
+  },
+  "cpu": {
+    "container_cpu_seconds_during_traffic": {
+      "api": 127.1,
+      "consumer": 20.0,
+      "dlq-writer": 2.9,
+      "grafana": 0.2,
+      "jaeger": 7.9,
+      "postgres": 39.5,
+      "prometheus": 0.6,
+      "reconciliation": 2.8,
+      "redpanda": 11.0,
+      "relay": 30.5,
+      "retry-10m": 2.5,
+      "retry-1m": 2.5,
+      "retry-5s": 2.5
+    },
+    "vm_busy_cpu_seconds_during_traffic": 282.7,
+    "vm_cpu_utilisation_during_traffic": 0.326,
+    "vm_busy_cpu_seconds_per_1000_requests": 14.29,
+    "load_client_cpu_seconds": 19.9
+  },
+  "thermal": {
+    "cpu_benchmark_before": {
+      "single_thread_s": 0.184,
+      "eight_processes_s": 1.285
+    },
+    "cpu_benchmark_after": {
+      "single_thread_s": 0.172,
+      "eight_processes_s": 1.309
+    },
+    "host_before": {
+      "power_source": "AC Power",
+      "battery": "81%; charging; 2:52 remaining present: true",
+      "low_power_mode": false,
+      "pmset_therm": [
+        "Note: No thermal warning level has been recorded",
+        "Note: No performance warning level has been recorded",
+        "Note: No CPU power status has been recorded"
+      ],
+      "load_average": "{ 6.03 5.19 4.74 }"
+    },
+    "host_after": {
+      "power_source": "AC Power",
+      "battery": "81%; charging; (no estimate) present: true",
+      "low_power_mode": false,
+      "pmset_therm": [
+        "Note: No thermal warning level has been recorded",
+        "Note: No performance warning level has been recorded",
+        "Note: No CPU power status has been recorded"
+      ],
+      "load_average": "{ 5.84 5.42 4.89 }"
+    }
+  },
+  "load": {
+    "payment_requests": 16820,
+    "resends_same_key_same_body": 2970,
+    "poison_published": 210,
+    "hot_account_share": 0.106,
+    "accounts": 201
+  },
+  "results": {
+    "traffic_seconds": 109.0,
+    "throughput_requests_per_s": 181.6,
+    "throughput_payments_created_per_s": 154.3,
+    "latency_ms": {
+      "p50": 85.2,
+      "p95": 144.3,
+      "p99": 189.0
+    },
+    "http_attempt_statuses": {
+      "201": 16820,
+      "200": 2970
+    },
+    "final_statuses": {
+      "201": 16820,
+      "200": 2970
+    },
+    "count_503": 0,
+    "window_503_seconds": 0,
+    "recovery_seconds_after_fault": 52.0,
+    "drain_seconds_after_traffic": 0.3,
+    "fault_timeline": [
+      [
+        "SIGKILL idempotent-payments-consumer-2 (of 2 consumers)",
+        "2026-11-12T14:44:24.454424+00:00"
+      ],
+      [
+        "killed",
+        "2026-11-12T14:44:24.617204+00:00"
+      ]
+    ],
+    "vm_min_available_mb": 1236,
+    "peak_memory_mb": {
+      "api": 125,
+      "consumer": 81,
+      "consumer-2": 89,
+      "dlq-writer": 67,
+      "grafana": 196,
+      "jaeger": 409,
+      "postgres": 445,
+      "prometheus": 124,
+      "reconciliation": 69,
+      "redpanda": 438,
+      "relay": 70,
+      "retry-10m": 67,
+      "retry-1m": 66,
+      "retry-5s": 65
+    },
+    "peak_cpu_percent": {
+      "api": 138,
+      "consumer": 79,
+      "consumer-2": 19,
+      "dlq-writer": 22,
+      "grafana": 1,
+      "jaeger": 29,
+      "postgres": 156,
+      "prometheus": 4,
+      "reconciliation": 21,
+      "redpanda": 23,
+      "relay": 42,
+      "retry-10m": 2,
+      "retry-1m": 1,
+      "retry-5s": 1
+    }
+  },
+  "checks": {
+    "zero_500_responses": {
+      "pass": true,
+      "500s": 0
+    },
+    "one_transaction_per_201_key": {
+      "pass": true,
+      "keys_answered_201": 16820,
+      "keys_paid_but_only_answered_by_replay": 0,
+      "transactions_for_run_accounts": 17021,
+      "funding_transactions": 201,
+      "keys_with_two_payment_ids": 0,
+      "keys_whose_stored_transaction_differs": 0
+    },
+    "one_payment_events_row_per_event": {
+      "pass": true,
+      "events": 16820,
+      "rows": 16820
+    },
+    "dlq_is_exactly_the_poison": {
+      "pass": true,
+      "injected": 210,
+      "dlq_rows": 210,
+      "unexpected": 0,
+      "missing": 0
+    },
+    "nothing_sent_to_retry_topics": {
+      "pass": true,
+      "messages": {
+        "payments.retry.5s": 0,
+        "payments.retry.1m": 0,
+        "payments.retry.10m": 0
+      }
+    },
+    "balances_match_the_arithmetic": {
+      "pass": true,
+      "accounts": 201,
+      "mismatched": {}
+    },
+    "invariants_I1_to_I4": {
+      "pass": true,
+      "checks": [
+        {
+          "name": "no_duplicate_event_ids",
+          "status": "pass",
+          "duplicates": 0
+        },
+        {
+          "name": "ledger_balances_to_zero",
+          "status": "pass",
+          "value": "0.0000"
+        },
+        {
+          "name": "outbox_fully_published",
+          "status": "pass",
+          "unpublished_older_than_60s": 0
+        },
+        {
+          "name": "no_negative_balances",
+          "status": "pass",
+          "offending_accounts": 0
+        }
+      ]
+    },
+    "drained_without_manual_repair": {
+      "pass": true,
+      "seconds_after_traffic": 0.3
+    },
+    "fault_executed": {
+      "pass": true,
+      "error": null
+    }
+  },
+  "manifest": "docs/results/manifests/chaos-consumer-kill-20000-20261112T201318.jsonl.gz"
+}

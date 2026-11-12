@@ -1,0 +1,220 @@
+{
+  "run": "db-restart-20000-20261112T201907",
+  "scenario": "db-restart",
+  "verdict": "PASS",
+  "seed": 10,
+  "round": 1,
+  "events_planned": 20000,
+  "concurrency": 16,
+  "machine": {
+    "host": "MacBook Air, Apple M2, 8 GB",
+    "host_cpu": "Apple M2",
+    "host_memory_gb": 8,
+    "docker_vm_memory_gb": 3.83,
+    "docker_vm_cpus": 8
+  },
+  "timing": {
+    "started_at": "2026-11-12T14:49:07+00:00",
+    "traffic_started_at": "2026-11-12T14:49:18+00:00",
+    "traffic_ended_at": "2026-11-12T14:51:46+00:00",
+    "ended_at": "2026-11-12T14:51:51+00:00"
+  },
+  "cpu": {
+    "container_cpu_seconds_during_traffic": {
+      "api": 171.0,
+      "consumer": 33.9,
+      "dlq-writer": 5.0,
+      "grafana": 0.3,
+      "jaeger": 10.5,
+      "postgres": null,
+      "prometheus": 0.9,
+      "reconciliation": 4.3,
+      "redpanda": 16.7,
+      "relay": 41.7,
+      "retry-10m": 4.7,
+      "retry-1m": 4.5,
+      "retry-5s": 4.6
+    },
+    "vm_busy_cpu_seconds_during_traffic": 385.9,
+    "vm_cpu_utilisation_during_traffic": 0.328,
+    "vm_busy_cpu_seconds_per_1000_requests": 19.5,
+    "load_client_cpu_seconds": 21.4
+  },
+  "thermal": {
+    "cpu_benchmark_before": {
+      "single_thread_s": 0.167,
+      "eight_processes_s": 1.819
+    },
+    "cpu_benchmark_after": {
+      "single_thread_s": 0.231,
+      "eight_processes_s": 2.484
+    },
+    "host_before": {
+      "power_source": "AC Power",
+      "battery": "81%; charging; 2:32 remaining present: true",
+      "low_power_mode": false,
+      "pmset_therm": [
+        "Note: No thermal warning level has been recorded",
+        "Note: No performance warning level has been recorded",
+        "Note: No CPU power status has been recorded"
+      ],
+      "load_average": "{ 5.62 5.54 5.06 }"
+    },
+    "host_after": {
+      "power_source": "AC Power",
+      "battery": "81%; charging; 2:12 remaining present: true",
+      "low_power_mode": false,
+      "pmset_therm": [
+        "Note: No thermal warning level has been recorded",
+        "Note: No performance warning level has been recorded",
+        "Note: No CPU power status has been recorded"
+      ],
+      "load_average": "{ 6.11 5.64 5.17 }"
+    }
+  },
+  "load": {
+    "payment_requests": 16845,
+    "resends_same_key_same_body": 2933,
+    "poison_published": 222,
+    "hot_account_share": 0.103,
+    "accounts": 201
+  },
+  "results": {
+    "traffic_seconds": 148.0,
+    "throughput_requests_per_s": 133.7,
+    "throughput_payments_created_per_s": 113.8,
+    "latency_ms": {
+      "p50": 114.5,
+      "p95": 192.2,
+      "p99": 245.8
+    },
+    "http_attempt_statuses": {
+      "201": 16845,
+      "200": 2933,
+      "503": 16
+    },
+    "final_statuses": {
+      "201": 16845,
+      "200": 2933
+    },
+    "count_503": 16,
+    "window_503_seconds": 0.0,
+    "recovery_seconds_after_fault": 0.0,
+    "drain_seconds_after_traffic": 0.9,
+    "fault_timeline": [
+      [
+        "restart postgres",
+        "2026-11-12T14:49:59.734614+00:00"
+      ],
+      [
+        "restored",
+        "2026-11-12T14:50:00.972917+00:00"
+      ]
+    ],
+    "vm_min_available_mb": 1209,
+    "peak_memory_mb": {
+      "api": 113,
+      "consumer": 73,
+      "dlq-writer": 65,
+      "grafana": 100,
+      "jaeger": 502,
+      "postgres": 415,
+      "prometheus": 82,
+      "reconciliation": 84,
+      "redpanda": 473,
+      "relay": 69,
+      "retry-10m": 66,
+      "retry-1m": 63,
+      "retry-5s": 57
+    },
+    "peak_cpu_percent": {
+      "api": 148,
+      "consumer": 26,
+      "dlq-writer": 1,
+      "grafana": 1,
+      "jaeger": 44,
+      "postgres": 92,
+      "prometheus": 2,
+      "reconciliation": 29,
+      "redpanda": 17,
+      "relay": 29,
+      "retry-10m": 3,
+      "retry-1m": 6,
+      "retry-5s": 3
+    }
+  },
+  "checks": {
+    "zero_500_responses": {
+      "pass": true,
+      "500s": 0
+    },
+    "one_transaction_per_201_key": {
+      "pass": true,
+      "keys_answered_201": 16845,
+      "keys_paid_but_only_answered_by_replay": 0,
+      "transactions_for_run_accounts": 17046,
+      "funding_transactions": 201,
+      "keys_with_two_payment_ids": 0,
+      "keys_whose_stored_transaction_differs": 0
+    },
+    "one_payment_events_row_per_event": {
+      "pass": true,
+      "events": 16845,
+      "rows": 16845
+    },
+    "dlq_is_exactly_the_poison": {
+      "pass": true,
+      "injected": 222,
+      "dlq_rows": 222,
+      "unexpected": 0,
+      "missing": 0
+    },
+    "nothing_sent_to_retry_topics": {
+      "pass": true,
+      "messages": {
+        "payments.retry.5s": 0,
+        "payments.retry.1m": 0,
+        "payments.retry.10m": 0
+      }
+    },
+    "balances_match_the_arithmetic": {
+      "pass": true,
+      "accounts": 201,
+      "mismatched": {}
+    },
+    "invariants_I1_to_I4": {
+      "pass": true,
+      "checks": [
+        {
+          "name": "no_duplicate_event_ids",
+          "status": "pass",
+          "duplicates": 0
+        },
+        {
+          "name": "ledger_balances_to_zero",
+          "status": "pass",
+          "value": "0.0000"
+        },
+        {
+          "name": "outbox_fully_published",
+          "status": "pass",
+          "unpublished_older_than_60s": 0
+        },
+        {
+          "name": "no_negative_balances",
+          "status": "pass",
+          "offending_accounts": 0
+        }
+      ]
+    },
+    "drained_without_manual_repair": {
+      "pass": true,
+      "seconds_after_traffic": 0.9
+    },
+    "fault_executed": {
+      "pass": true,
+      "error": null
+    }
+  },
+  "manifest": "docs/results/manifests/chaos-db-restart-20000-20261112T201907.jsonl.gz"
+}

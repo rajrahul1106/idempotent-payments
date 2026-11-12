@@ -1,4 +1,4 @@
-.PHONY: help up down logs topics migrate downgrade seed test test-property test-fast test-unit test-integration test-messaging load chaos fmt check rules
+.PHONY: help up down logs topics migrate downgrade seed test test-property test-fast test-unit test-integration test-messaging load chaos baseline fmt check rules
 
 # The test suite never reads DATABASE_URL. It points the app at
 # TEST_DATABASE_URL and refuses any database whose name does not end in
@@ -56,8 +56,11 @@ load:  ## Load generator against a running API
 
 CHAOS_EVENTS ?= 20000
 
-chaos:  ## The four chaos scenarios, CHAOS_EVENTS each (results in docs/results/)
+chaos:  ## The five chaos scenarios, CHAOS_EVENTS each (results in docs/results/)
 	PYTHONPATH=. CHAOS_EVENTS=$(CHAOS_EVENTS) python scripts/chaos_run.py --scenario all
+
+baseline:  ## Steady-state throughput, no faults: 4 to 64 clients, 2 minutes each
+	PYTHONPATH=. python scripts/baseline_run.py
 
 check:  ## Static checks, including the no-float-money rule
 	PYTHONPATH=. python scripts/check_no_float_money.py
