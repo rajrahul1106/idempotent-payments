@@ -1,0 +1,144 @@
+{
+  "run": "db-restart-5000-20261112T022540",
+  "scenario": "db-restart",
+  "verdict": "PASS",
+  "seed": 8,
+  "events_planned": 5000,
+  "concurrency": 16,
+  "machine": {
+    "host": "MacBook Air, Apple M2, 8 GB",
+    "host_cpu": "Apple M2",
+    "host_memory_gb": 8,
+    "docker_vm_memory_gb": 3.83,
+    "docker_vm_cpus": 8
+  },
+  "load": {
+    "payment_requests": 4216,
+    "resends_same_key_same_body": 733,
+    "poison_published": 51,
+    "hot_account_share": 0.112,
+    "accounts": 201
+  },
+  "results": {
+    "traffic_seconds": 30.7,
+    "throughput_requests_per_s": 161.8,
+    "throughput_payments_created_per_s": 137.4,
+    "latency_ms": {
+      "p50": 89.5,
+      "p95": 167.4,
+      "p99": 231.2
+    },
+    "http_attempt_statuses": {
+      "201": 4216,
+      "200": 733,
+      "503": 16
+    },
+    "final_statuses": {
+      "201": 4216,
+      "200": 733
+    },
+    "count_503": 16,
+    "window_503_seconds": 0.0,
+    "recovery_seconds_after_fault": 0.6,
+    "drain_seconds_after_traffic": 0.2,
+    "fault_timeline": [
+      [
+        "restart postgres",
+        "2026-11-11T20:56:04.727567+00:00"
+      ],
+      [
+        "restored",
+        "2026-11-11T20:56:05.439921+00:00"
+      ]
+    ],
+    "vm_min_available_mb": 356,
+    "peak_memory_mb": {
+      "api": 90,
+      "consumer": 73,
+      "dlq-writer": 66,
+      "grafana": 78,
+      "jaeger": 377,
+      "postgres": 169,
+      "prometheus": 70,
+      "reconciliation": 63,
+      "redpanda": 97,
+      "relay": 84,
+      "retry-10m": 58,
+      "retry-1m": 58,
+      "retry-5s": 58
+    }
+  },
+  "checks": {
+    "zero_500_responses": {
+      "pass": true,
+      "500s": 0
+    },
+    "one_transaction_per_201_key": {
+      "pass": true,
+      "keys_answered_201": 4216,
+      "transactions_for_run_accounts": 4417,
+      "funding_transactions": 201,
+      "keys_with_two_payment_ids": 0,
+      "keys_whose_stored_transaction_differs": 0
+    },
+    "one_payment_events_row_per_event": {
+      "pass": true,
+      "events": 4216,
+      "rows": 4216
+    },
+    "dlq_is_exactly_the_poison": {
+      "pass": true,
+      "injected": 51,
+      "dlq_rows": 51,
+      "unexpected": 0,
+      "missing": 0
+    },
+    "nothing_sent_to_retry_topics": {
+      "pass": true,
+      "messages": {
+        "payments.retry.5s": 0,
+        "payments.retry.1m": 0,
+        "payments.retry.10m": 0
+      }
+    },
+    "balances_match_the_arithmetic": {
+      "pass": true,
+      "accounts": 201,
+      "mismatched": {}
+    },
+    "invariants_I1_to_I4": {
+      "pass": true,
+      "checks": [
+        {
+          "name": "no_duplicate_event_ids",
+          "status": "pass",
+          "duplicates": 0
+        },
+        {
+          "name": "ledger_balances_to_zero",
+          "status": "pass",
+          "value": "0.0000"
+        },
+        {
+          "name": "outbox_fully_published",
+          "status": "pass",
+          "unpublished_older_than_60s": 0
+        },
+        {
+          "name": "no_negative_balances",
+          "status": "pass",
+          "offending_accounts": 0
+        }
+      ]
+    },
+    "drained_without_manual_repair": {
+      "pass": true,
+      "seconds_after_traffic": 0.2
+    },
+    "fault_executed": {
+      "pass": true,
+      "error": null
+    }
+  },
+  "manifest": "docs/results/manifests/chaos-db-restart-5000-20261112T022540.jsonl.gz"
+}

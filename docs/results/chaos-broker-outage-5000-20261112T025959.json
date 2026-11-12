@@ -1,0 +1,147 @@
+{
+  "run": "broker-outage-5000-20261112T025959",
+  "scenario": "broker-outage",
+  "verdict": "PASS",
+  "seed": 8,
+  "events_planned": 5000,
+  "concurrency": 16,
+  "machine": {
+    "host": "MacBook Air, Apple M2, 8 GB",
+    "host_cpu": "Apple M2",
+    "host_memory_gb": 8,
+    "docker_vm_memory_gb": 3.83,
+    "docker_vm_cpus": 8
+  },
+  "load": {
+    "payment_requests": 4216,
+    "resends_same_key_same_body": 733,
+    "poison_published": 51,
+    "hot_account_share": 0.112,
+    "accounts": 201
+  },
+  "results": {
+    "traffic_seconds": 81.5,
+    "throughput_requests_per_s": 60.7,
+    "throughput_payments_created_per_s": 51.7,
+    "latency_ms": {
+      "p50": 68.3,
+      "p95": 144.4,
+      "p99": 289.9
+    },
+    "http_attempt_statuses": {
+      "201": 4216,
+      "200": 733
+    },
+    "final_statuses": {
+      "201": 4216,
+      "200": 733
+    },
+    "count_503": 0,
+    "window_503_seconds": 0,
+    "recovery_seconds_after_fault": 47.9,
+    "drain_seconds_after_traffic": 44.4,
+    "fault_timeline": [
+      [
+        "stop redpanda",
+        "2026-11-11T21:30:23.630764+00:00"
+      ],
+      [
+        "start redpanda",
+        "2026-11-11T21:31:24.145341+00:00"
+      ],
+      [
+        "restored",
+        "2026-11-11T21:31:24.439376+00:00"
+      ]
+    ],
+    "vm_min_available_mb": 1596,
+    "peak_memory_mb": {
+      "api": 91,
+      "consumer": 72,
+      "dlq-writer": 65,
+      "grafana": 208,
+      "jaeger": 354,
+      "postgres": 216,
+      "prometheus": 112,
+      "reconciliation": 70,
+      "redpanda": 388,
+      "relay": 68,
+      "retry-10m": 78,
+      "retry-1m": 78,
+      "retry-5s": 78
+    }
+  },
+  "checks": {
+    "zero_500_responses": {
+      "pass": true,
+      "500s": 0
+    },
+    "one_transaction_per_201_key": {
+      "pass": true,
+      "keys_answered_201": 4216,
+      "transactions_for_run_accounts": 4417,
+      "funding_transactions": 201,
+      "keys_with_two_payment_ids": 0,
+      "keys_whose_stored_transaction_differs": 0
+    },
+    "one_payment_events_row_per_event": {
+      "pass": true,
+      "events": 4216,
+      "rows": 4216
+    },
+    "dlq_is_exactly_the_poison": {
+      "pass": true,
+      "injected": 51,
+      "dlq_rows": 51,
+      "unexpected": 0,
+      "missing": 0
+    },
+    "nothing_sent_to_retry_topics": {
+      "pass": true,
+      "messages": {
+        "payments.retry.5s": 0,
+        "payments.retry.1m": 0,
+        "payments.retry.10m": 0
+      }
+    },
+    "balances_match_the_arithmetic": {
+      "pass": true,
+      "accounts": 201,
+      "mismatched": {}
+    },
+    "invariants_I1_to_I4": {
+      "pass": true,
+      "checks": [
+        {
+          "name": "no_duplicate_event_ids",
+          "status": "pass",
+          "duplicates": 0
+        },
+        {
+          "name": "ledger_balances_to_zero",
+          "status": "pass",
+          "value": "0.0000"
+        },
+        {
+          "name": "outbox_fully_published",
+          "status": "pass",
+          "unpublished_older_than_60s": 0
+        },
+        {
+          "name": "no_negative_balances",
+          "status": "pass",
+          "offending_accounts": 0
+        }
+      ]
+    },
+    "drained_without_manual_repair": {
+      "pass": true,
+      "seconds_after_traffic": 44.4
+    },
+    "fault_executed": {
+      "pass": true,
+      "error": null
+    }
+  },
+  "manifest": "docs/results/manifests/chaos-broker-outage-5000-20261112T025959.jsonl.gz"
+}

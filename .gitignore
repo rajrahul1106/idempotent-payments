@@ -15,3 +15,6 @@ htmlcov/
 .idea/
 .vscode/
 BLUEPRINT.md
+
+# Raw chaos manifests (every request and response), kept on disk only
+docs/results/manifests/chaos-*.jsonl.gz

@@ -1,4 +1,4 @@
-.PHONY: help up down logs topics migrate downgrade seed test test-fast test-unit test-integration test-messaging load chaos fmt check rules
+.PHONY: help up down logs topics migrate downgrade seed test test-property test-fast test-unit test-integration test-messaging load chaos fmt check rules
 
 # The test suite never reads DATABASE_URL. It points the app at
 # TEST_DATABASE_URL and refuses any database whose name does not end in
@@ -34,8 +34,11 @@ downgrade:  ## Roll back one migration
 seed:  ## Create system and demo accounts
 	PYTHONPATH=. python scripts/seed.py
 
-test:  ## Full suite. Needs PostgreSQL; fails, never skips, without it
-	pytest
+test:  ## Full suite except the property run. Needs PostgreSQL and Kafka; fails, never skips
+	pytest -m "not property"
+
+test-property:  ## Hypothesis state machine, 200 examples (minutes; kept out of make test)
+	pytest tests/property -m property
 
 test-fast:  ## Unit tests only, no infrastructure
 	pytest tests/unit -m "not integration and not messaging and not chaos"
@@ -51,8 +54,10 @@ test-messaging:  ## Needs Kafka
 load:  ## Load generator against a running API
 	PYTHONPATH=. python scripts/load_test.py
 
-chaos:  ## Failure injection run
-	PYTHONPATH=. python scripts/chaos_run.py
+CHAOS_EVENTS ?= 20000
+
+chaos:  ## The four chaos scenarios, CHAOS_EVENTS each (results in docs/results/)
+	PYTHONPATH=. CHAOS_EVENTS=$(CHAOS_EVENTS) python scripts/chaos_run.py --scenario all
 
 check:  ## Static checks, including the no-float-money rule
 	PYTHONPATH=. python scripts/check_no_float_money.py

@@ -1,0 +1,144 @@
+{
+  "run": "consumer-kill-50000-20261112T031413",
+  "scenario": "consumer-kill",
+  "verdict": "PASS",
+  "seed": 8,
+  "events_planned": 50000,
+  "concurrency": 16,
+  "machine": {
+    "host": "MacBook Air, Apple M2, 8 GB",
+    "host_cpu": "Apple M2",
+    "host_memory_gb": 8,
+    "docker_vm_memory_gb": 3.83,
+    "docker_vm_cpus": 8
+  },
+  "load": {
+    "payment_requests": 41968,
+    "resends_same_key_same_body": 7522,
+    "poison_published": 510,
+    "hot_account_share": 0.102,
+    "accounts": 201
+  },
+  "results": {
+    "traffic_seconds": 316.3,
+    "throughput_requests_per_s": 156.5,
+    "throughput_payments_created_per_s": 132.7,
+    "latency_ms": {
+      "p50": 93.8,
+      "p95": 186.7,
+      "p99": 288.4
+    },
+    "http_attempt_statuses": {
+      "201": 41968,
+      "200": 7522
+    },
+    "final_statuses": {
+      "201": 41968,
+      "200": 7522
+    },
+    "count_503": 0,
+    "window_503_seconds": 0,
+    "recovery_seconds_after_fault": 48.3,
+    "drain_seconds_after_traffic": 0.4,
+    "fault_timeline": [
+      [
+        "SIGKILL idempotent-payments-consumer-1 (of 2 consumers)",
+        "2026-11-11T21:46:36.118178+00:00"
+      ],
+      [
+        "killed",
+        "2026-11-11T21:46:36.313621+00:00"
+      ]
+    ],
+    "vm_min_available_mb": 1212,
+    "peak_memory_mb": {
+      "api": 112,
+      "consumer": 79,
+      "consumer-2": 77,
+      "dlq-writer": 66,
+      "grafana": 214,
+      "jaeger": 512,
+      "postgres": 362,
+      "prometheus": 127,
+      "reconciliation": 79,
+      "redpanda": 306,
+      "relay": 80,
+      "retry-10m": 79,
+      "retry-1m": 79,
+      "retry-5s": 78
+    }
+  },
+  "checks": {
+    "zero_500_responses": {
+      "pass": true,
+      "500s": 0
+    },
+    "one_transaction_per_201_key": {
+      "pass": true,
+      "keys_answered_201": 41968,
+      "transactions_for_run_accounts": 42169,
+      "funding_transactions": 201,
+      "keys_with_two_payment_ids": 0,
+      "keys_whose_stored_transaction_differs": 0
+    },
+    "one_payment_events_row_per_event": {
+      "pass": true,
+      "events": 41968,
+      "rows": 41968
+    },
+    "dlq_is_exactly_the_poison": {
+      "pass": true,
+      "injected": 510,
+      "dlq_rows": 510,
+      "unexpected": 0,
+      "missing": 0
+    },
+    "nothing_sent_to_retry_topics": {
+      "pass": true,
+      "messages": {
+        "payments.retry.5s": 0,
+        "payments.retry.1m": 0,
+        "payments.retry.10m": 0
+      }
+    },
+    "balances_match_the_arithmetic": {
+      "pass": true,
+      "accounts": 201,
+      "mismatched": {}
+    },
+    "invariants_I1_to_I4": {
+      "pass": true,
+      "checks": [
+        {
+          "name": "no_duplicate_event_ids",
+          "status": "pass",
+          "duplicates": 0
+        },
+        {
+          "name": "ledger_balances_to_zero",
+          "status": "pass",
+          "value": "0.0000"
+        },
+        {
+          "name": "outbox_fully_published",
+          "status": "pass",
+          "unpublished_older_than_60s": 0
+        },
+        {
+          "name": "no_negative_balances",
+          "status": "pass",
+          "offending_accounts": 0
+        }
+      ]
+    },
+    "drained_without_manual_repair": {
+      "pass": true,
+      "seconds_after_traffic": 0.4
+    },
+    "fault_executed": {
+      "pass": true,
+      "error": null
+    }
+  },
+  "manifest": "docs/results/manifests/chaos-consumer-kill-50000-20261112T031413.jsonl.gz"
+}

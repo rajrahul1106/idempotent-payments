@@ -171,9 +171,9 @@ def kafka() -> str:
 def _require_db(request):
     """Database and broker tests fail, never skip, when either is unusable."""
     node = request.node
-    if node.get_closest_marker("integration") or node.get_closest_marker("messaging"):
+    if any(node.get_closest_marker(m) for m in ("integration", "messaging", "property")):
         request.getfixturevalue("database")
-    if node.get_closest_marker("messaging"):
+    if node.get_closest_marker("messaging") or node.get_closest_marker("property"):
         request.getfixturevalue("kafka")
 
 

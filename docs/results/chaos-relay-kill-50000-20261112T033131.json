@@ -1,0 +1,147 @@
+{
+  "run": "relay-kill-50000-20261112T033131",
+  "scenario": "relay-kill",
+  "verdict": "PASS",
+  "seed": 11,
+  "events_planned": 50000,
+  "concurrency": 16,
+  "machine": {
+    "host": "MacBook Air, Apple M2, 8 GB",
+    "host_cpu": "Apple M2",
+    "host_memory_gb": 8,
+    "docker_vm_memory_gb": 3.83,
+    "docker_vm_cpus": 8
+  },
+  "load": {
+    "payment_requests": 41952,
+    "resends_same_key_same_body": 7530,
+    "poison_published": 518,
+    "hot_account_share": 0.098,
+    "accounts": 201
+  },
+  "results": {
+    "traffic_seconds": 312.1,
+    "throughput_requests_per_s": 158.6,
+    "throughput_payments_created_per_s": 134.4,
+    "latency_ms": {
+      "p50": 92.8,
+      "p95": 179.7,
+      "p99": 310.5
+    },
+    "http_attempt_statuses": {
+      "201": 41952,
+      "200": 7530
+    },
+    "final_statuses": {
+      "201": 41952,
+      "200": 7530
+    },
+    "count_503": 0,
+    "window_503_seconds": 0,
+    "recovery_seconds_after_fault": 4.5,
+    "drain_seconds_after_traffic": 2.5,
+    "fault_timeline": [
+      [
+        "SIGKILL relay",
+        "2026-11-11T22:04:39.533017+00:00"
+      ],
+      [
+        "start relay",
+        "2026-11-11T22:04:50.418783+00:00"
+      ],
+      [
+        "restored",
+        "2026-11-11T22:04:52.449063+00:00"
+      ]
+    ],
+    "vm_min_available_mb": 1299,
+    "peak_memory_mb": {
+      "api": 98,
+      "consumer": 83,
+      "dlq-writer": 70,
+      "grafana": 202,
+      "jaeger": 431,
+      "postgres": 625,
+      "prometheus": 118,
+      "reconciliation": 68,
+      "redpanda": 420,
+      "relay": 102,
+      "retry-10m": 67,
+      "retry-1m": 67,
+      "retry-5s": 66
+    }
+  },
+  "checks": {
+    "zero_500_responses": {
+      "pass": true,
+      "500s": 0
+    },
+    "one_transaction_per_201_key": {
+      "pass": true,
+      "keys_answered_201": 41952,
+      "transactions_for_run_accounts": 42153,
+      "funding_transactions": 201,
+      "keys_with_two_payment_ids": 0,
+      "keys_whose_stored_transaction_differs": 0
+    },
+    "one_payment_events_row_per_event": {
+      "pass": true,
+      "events": 41952,
+      "rows": 41952
+    },
+    "dlq_is_exactly_the_poison": {
+      "pass": true,
+      "injected": 518,
+      "dlq_rows": 518,
+      "unexpected": 0,
+      "missing": 0
+    },
+    "nothing_sent_to_retry_topics": {
+      "pass": true,
+      "messages": {
+        "payments.retry.5s": 0,
+        "payments.retry.1m": 0,
+        "payments.retry.10m": 0
+      }
+    },
+    "balances_match_the_arithmetic": {
+      "pass": true,
+      "accounts": 201,
+      "mismatched": {}
+    },
+    "invariants_I1_to_I4": {
+      "pass": true,
+      "checks": [
+        {
+          "name": "no_duplicate_event_ids",
+          "status": "pass",
+          "duplicates": 0
+        },
+        {
+          "name": "ledger_balances_to_zero",
+          "status": "pass",
+          "value": "0.0000"
+        },
+        {
+          "name": "outbox_fully_published",
+          "status": "pass",
+          "unpublished_older_than_60s": 0
+        },
+        {
+          "name": "no_negative_balances",
+          "status": "pass",
+          "offending_accounts": 0
+        }
+      ]
+    },
+    "drained_without_manual_repair": {
+      "pass": true,
+      "seconds_after_traffic": 2.5
+    },
+    "fault_executed": {
+      "pass": true,
+      "error": null
+    }
+  },
+  "manifest": "docs/results/manifests/chaos-relay-kill-50000-20261112T033131.jsonl.gz"
+}
