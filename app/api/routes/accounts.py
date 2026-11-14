@@ -7,14 +7,65 @@ import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import Principal, db_session, require_account_access, require_role
+from app.api.deps import (
+    READ_ALL_ROLES,
+    Principal,
+    can_read_account,
+    db_session,
+    require_account_access,
+    require_role,
+)
 from app.core.exceptions import AccountNotFound
 from app.core.money import format_amount, to_minor
 from app.db.repositories import accounts as repo
 from app.db.session import unit_of_work
-from app.schemas.common import AccountCreate, AccountOut, PostingOut
+from app.schemas.common import AccountCreate, AccountListItem, AccountOut, PostingOut
+from app.services import payment_views
+from app.services.payment import Actor, can_debit
 
 router = APIRouter(tags=["accounts"])
+
+
+@router.get("/accounts", response_model=list[AccountListItem])
+def list_accounts(
+    limit: int = Query(100, ge=1, le=500),
+    principal: Principal = Depends(require_role("viewer")),
+    session: Session = Depends(db_session),
+) -> list[AccountListItem]:
+    """The accounts the caller may see, oldest first.
+
+    viewer and operator: every account, with balances. client (D26): its own
+    account with its balance, plus every customer account by id and holder
+    name only, so it can choose whom to pay; no system accounts. can_debit
+    is the payment service's own D4 rule, not a copy of it.
+    """
+    read_all = principal.role in READ_ALL_ROLES
+    accounts = payment_views.accounts_page(
+        session,
+        limit=limit,
+        customers_only=not read_all,
+        always_include=None if read_all else principal.account_id,
+    )
+    visible = [a.id for a in accounts if can_read_account(principal, a.id)]
+    balances = payment_views.balances(session, visible)
+    actor = Actor(role=principal.role, account_id=principal.account_id)
+
+    out = []
+    for account in accounts:
+        details = can_read_account(principal, account.id)
+        bal = balances.get(account.id)
+        out.append(
+            AccountListItem(
+                id=account.id,
+                holder_name=account.holder_name,
+                currency=account.currency if details else None,
+                account_type=account.account_type if details else None,
+                balance=format_amount(bal) if bal is not None else None,
+                balance_minor=to_minor(bal, account.currency) if bal is not None else None,
+                can_debit=can_debit(actor, account.id, account.account_type),
+            )
+        )
+    return out
 
 
 def _to_out(session: Session, account) -> AccountOut:

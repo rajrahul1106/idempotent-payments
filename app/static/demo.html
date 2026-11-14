@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payments demo</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #5d6673; --faint: #8a93a0;
+    --line: #dde1e6; --accent: #2457c5; --accent-text: #ffffff;
+    --ok: #157f3b; --ok-bg: #e6f4ea; --warn: #8a5a00; --warn-bg: #fff4d6;
+    --bad: #b3261e; --bad-bg: #fde8e7; --info-bg: #e8effc;
+    --radius: 10px; --gap: 16px;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --panel: #1a1e24; --text: #e6e9ed; --muted: #a3acb8; --faint: #7d8794;
+      --line: #2c323a; --accent: #7aa2ff; --accent-text: #0d1220;
+      --ok: #6fd491; --ok-bg: #16301f; --warn: #f0c35a; --warn-bg: #33290f;
+      --bad: #ff8a80; --bad-bg: #3a1714; --info-bg: #1b2740;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.45; }
+  header, footer { padding: 12px 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  h1 { font-size: 18px; margin: 0 12px 0 0; }
+  h2 { font-size: 16px; margin: 0 0 10px; }
+  h3 { font-size: 14px; margin: 14px 0 6px; }
+  main { display: grid; gap: var(--gap); padding: var(--gap); grid-template-columns: 1fr; max-width: 1500px; margin: 0 auto; }
+  @media (min-width: 1100px) { main { grid-template-columns: 330px 1fr 360px; align-items: start; } }
+  section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  .col { display: grid; gap: var(--gap); align-content: start; }
+  label { display: block; font-weight: 600; margin: 10px 0 4px; }
+  input, select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+  button { font: inherit; cursor: pointer; border-radius: 8px; padding: 8px 12px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .muted { color: var(--muted); }
+  .tech { color: var(--faint); font-size: 12px; }
+  .hidden { display: none !important; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .signin input { width: auto; min-width: 140px; }
+  .signin label { display: inline; margin: 0 4px 0 0; }
+  .action { margin-top: 12px; }
+  .action button { width: 100%; text-align: left; }
+  .action p { margin: 4px 2px 0; font-size: 13px; color: var(--muted); }
+  .badge { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 18px; padding: 6px 14px; border-radius: 999px; }
+  .badge.ok { color: var(--ok); background: var(--ok-bg); }
+  .badge.wait { color: var(--warn); background: var(--warn-bg); }
+  .badge.bad { color: var(--bad); background: var(--bad-bg); }
+  .badge.none { color: var(--muted); background: var(--bg); }
+  .pill { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+  .pill.ok { color: var(--ok); background: var(--ok-bg); }
+  .pill.bad { color: var(--bad); background: var(--bad-bg); }
+  .pill.wait { color: var(--warn); background: var(--warn-bg); }
+  .message { padding: 10px 12px; border-radius: 8px; margin: 10px 0; }
+  .message.info { background: var(--info-bg); }
+  .message.bad { background: var(--bad-bg); color: var(--bad); }
+  .message.ok { background: var(--ok-bg); color: var(--ok); }
+  ol.tracker { list-style: none; padding: 0; margin: 16px 0; display: grid; gap: 10px; grid-template-columns: 1fr; }
+  @media (min-width: 700px) { ol.tracker { grid-template-columns: repeat(5, 1fr); } }
+  ol.tracker li { border: 1px solid var(--line); border-radius: 8px; padding: 10px; position: relative; }
+  ol.tracker li.done { border-color: var(--ok); }
+  .step-head { display: flex; gap: 6px; align-items: center; font-weight: 600; }
+  .icon { display: inline-flex; width: 20px; height: 20px; border-radius: 50%; align-items: center; justify-content: center; font-size: 13px; flex: none; }
+  .icon.done { background: var(--ok); color: var(--panel); }
+  .icon.todo { border: 2px solid var(--faint); }
+  .spinner { width: 16px; height: 16px; border: 2px solid var(--faint); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+  .step-time { font-size: 13px; margin: 4px 0; }
+  .step-explain { font-size: 13px; color: var(--muted); margin: 0; }
+  .cards { display: grid; gap: 10px; grid-template-columns: 1fr; }
+  @media (min-width: 700px) { .cards { grid-template-columns: 1fr 1fr; } }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  ul.plain { list-style: none; padding: 0; margin: 0; }
+  ul.plain li { padding: 6px 0; border-bottom: 1px solid var(--line); }
+  ul.plain li:last-child { border-bottom: 0; }
+  .list-button { width: 100%; text-align: left; border: 0; background: none; padding: 4px 2px; }
+  .list-button:hover { background: var(--bg); }
+  .scroll { max-height: 320px; overflow: auto; }
+  .amount { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .out { color: var(--bad); }
+  .in { color: var(--ok); }
+  details summary { cursor: pointer; font-weight: 600; }
+  footer { display: flex; flex-wrap: wrap; gap: 16px; border-top: 1px solid var(--line); background: var(--panel); }
+  footer a, a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Payments demo</h1>
+  <form id="signin" class="signin row" autocomplete="off" aria-label="Sign in">
+    <label for="username">Username</label>
+    <input id="username" name="username" required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" required>
+    <button class="primary" type="submit">Sign in</button>
+    <span id="quickpick" class="row hidden" aria-label="Fill in a demo username">
+      <button type="button" data-user="alice">Alice: customer</button>
+      <button type="button" data-user="operator">Operator: bank staff</button>
+      <button type="button" data-user="auditor">Auditor: read-only</button>
+    </span>
+    <span class="tech">Development passwords are in scripts/seed.py</span>
+  </form>
+  <div id="whoami" class="row hidden">
+    <span id="whoami-text"></span>
+    <button type="button" id="signout">Sign out</button>
+  </div>
+  <div id="session-message" role="status" aria-live="polite" class="muted"></div>
+</header>
+
+<main id="app" class="hidden">
+  <!-- LEFT -->
+  <div class="col">
+    <section class="panel" id="send-panel" aria-labelledby="send-title">
+      <h2 id="send-title">Send money</h2>
+      <form id="send-form" novalidate>
+        <label for="from">From</label>
+        <select id="from" required></select>
+        <label for="to">To</label>
+        <select id="to" required></select>
+        <label for="amount">Amount in rupees</label>
+        <input id="amount" inputmode="decimal" placeholder="500.00" required aria-describedby="amount-help">
+        <div id="amount-help" class="tech">Up to two decimal places, for example 500 or 500.50</div>
+        <label for="note">Note (optional)</label>
+        <input id="note" maxlength="64" placeholder="Rent, dinner, anything">
+        <div class="action">
+          <button class="primary" type="submit" id="btn-send">Send payment</button>
+          <p>Moves the money once and shows every step.</p>
+        </div>
+        <div class="action">
+          <button type="button" id="btn-again" disabled>Send the same request again</button>
+          <p>Proves a retry never charges twice: you get the first answer back.</p>
+        </div>
+        <div class="action">
+          <button type="button" id="btn-ten">Send 10 copies at once</button>
+          <p>Proves ten identical requests at the same moment move money only once.</p>
+        </div>
+        <div class="action">
+          <button type="button" id="btn-different" disabled>Same request, different amount</button>
+          <p>Proves a reused request ID with a changed amount is refused, not ignored.</p>
+        </div>
+        <div id="send-error" class="message bad hidden" role="alert"></div>
+      </form>
+    </section>
+    <section class="panel hidden" id="readonly-panel">
+      <h2>Send money</h2>
+      <p>Read-only: auditors can see everything but cannot move money.</p>
+    </section>
+    <section class="panel">
+      <details>
+        <summary>How it works</summary>
+        <ol class="muted">
+          <li>You send a payment with a unique request ID.</li>
+          <li>The bank checks the ID, so a repeat is answered, never charged again.</li>
+          <li>In one step it takes the money from one account and adds it to the other.</li>
+          <li>In that same step it saves a delivery note for the follow-up work.</li>
+          <li>A courier hands the note to a processor, which may receive it more than once.</li>
+          <li>The processor remembers every note it has done, so the follow-up runs exactly once.</li>
+        </ol>
+      </details>
+    </section>
+  </div>
+
+  <!-- CENTER -->
+  <div class="col">
+    <section class="panel" aria-labelledby="pay-title">
+      <h2 id="pay-title">This payment</h2>
+      <div id="pay-empty" class="muted">Send a payment or pick one from Recent payments.</div>
+      <div id="pay-view" class="hidden">
+        <div class="row">
+          <span id="badge" class="badge none" role="status" aria-live="polite"></span>
+          <span id="pay-id" class="tech"></span>
+        </div>
+        <p id="summary"></p>
+        <div id="duplicate" class="message ok hidden" role="status"></div>
+        <div id="refused" class="message bad hidden" role="alert"></div>
+        <div id="journey-part">
+          <ol class="tracker" id="tracker" aria-label="Payment steps"></ol>
+          <div id="poll-note" class="muted" aria-live="polite"></div>
+          <div class="cards">
+            <div class="card"><h3>Sender</h3><div id="sender"></div></div>
+            <div class="card"><h3>Receiver</h3><div id="receiver"></div></div>
+          </div>
+          <h3>Ledger entries <span class="tech">double-entry postings</span></h3>
+          <table aria-describedby="ledger-badge">
+            <thead><tr><th scope="col">Account</th><th scope="col">Direction</th><th scope="col" class="num">Amount</th></tr></thead>
+            <tbody id="ledger"></tbody>
+          </table>
+          <p><span id="ledger-badge" class="pill"></span></p>
+          <h3>Failures <span class="tech">dead-letter queue</span></h3>
+          <div id="failures"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- RIGHT -->
+  <div class="col">
+    <section class="panel" aria-labelledby="acc-title">
+      <div class="row"><h2 id="acc-title">Accounts</h2><button type="button" id="refresh-accounts">Refresh</button></div>
+      <ul class="plain scroll" id="accounts"></ul>
+    </section>
+    <section class="panel" aria-labelledby="recent-title">
+      <h2 id="recent-title">Recent payments</h2>
+      <ul class="plain scroll" id="recent"></ul>
+    </section>
+    <section class="panel hidden" id="recon-panel" aria-labelledby="recon-title">
+      <div class="row"><h2 id="recon-title">Is the money correct?</h2><button type="button" id="run-recon">Check now</button></div>
+      <ul class="plain" id="recon"></ul>
+    </section>
+    <section class="panel hidden" id="dlq-panel" aria-labelledby="dlq-title">
+      <div class="row"><h2 id="dlq-title">Problem messages</h2><button type="button" id="refresh-dlq">Refresh</button></div>
+      <p id="dlq-count" class="muted"></p>
+      <ul class="plain" id="dlq"></ul>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <a href="http://localhost:3000" target="_blank" rel="noopener">Grafana dashboards</a>
+  <a id="jaeger-link" href="http://localhost:16686" target="_blank" rel="noopener">Jaeger traces</a>
+  <a href="/docs" target="_blank" rel="noopener">API docs</a>
+</footer>
+
+<script>
+"use strict";
+(function () {
+  // Everything below lives in memory only: the token is never stored.
+  const state = {
+    token: null, role: null, username: null, accountId: null, expiryTimer: null,
+    accounts: [], last: null, current: null, poll: null, traceId: null, eventId: null,
+  };
+  const $ = (id) => document.getElementById(id);
+  const LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname);
+
+  const ERRORS = {
+    insufficient_funds: "Not enough money in this account.",
+    idempotency_key_reuse: "This request ID was already used for a different payment.",
+    service_busy: "The account is busy, try again in a second.",
+    forbidden: "Your role is not allowed to do this.",
+    rate_limited: "Too many requests, wait a minute.",
+    unauthenticated: "Wrong username or password.",
+    account_not_found: "That account does not exist.",
+    account_not_active: "That account is not active.",
+    same_account_transfer: "Choose two different accounts.",
+    currency_mismatch: "The two accounts use different currencies.",
+    request_in_progress: "The same request is still being handled. Try again in a moment.",
+    service_unavailable: "The bank's database is unavailable. Try again shortly.",
+    payload_too_large: "The request is too large.",
+    payment_not_found: "That payment does not exist.",
+    internal_error: "Something went wrong on the server.",
+  };
+  function plainError(status, body) {
+    const err = (body && body.error) || {};
+    if (status === 403) return ERRORS.forbidden;
+    if (status === 429) return ERRORS.rate_limited;
+    if (ERRORS[err.code]) return ERRORS[err.code];
+    if (err.code === "invalid_request") return "The request was not valid: " + (err.message || "check the form") + ".";
+    return err.message || ("The request failed with status " + status + ".");
+  }
+
+  // ---------- money, as strings only ----------
+  function rupeesToMinor(text) {
+    const cleaned = String(text).trim().replace(/,/g, "");
+    const m = /^(\d{1,10})(?:\.(\d{1,2}))?$/.exec(cleaned);
+    if (!m) return null;
+    const minor = BigInt(m[1]) * 100n + BigInt((m[2] || "").padEnd(2, "0"));
+    return minor > 0n ? minor : null;
+  }
+  function formatAmount(amount, currency) {
+    if (amount === null || amount === undefined) return null;
+    let s = String(amount), sign = "";
+    if (s.startsWith("-")) { sign = "-"; s = s.slice(1); }
+    const parts = s.split(".");
+    let frac = (parts[1] || "").replace(/0+$/, "");
+    frac = frac.padEnd(2, "0");
+    const whole = BigInt(parts[0] || "0").toLocaleString("en-IN");
+    const symbol = currency === "INR" || !currency ? "₹" : currency + " ";
+    return sign + symbol + whole + "." + frac;
+  }
+  function time(iso) { return iso ? new Date(iso).toLocaleTimeString() : ""; }
+  function uuid() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+    const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+    return h.slice(0, 8) + "-" + h.slice(8, 12) + "-" + h.slice(12, 16) + "-" + h.slice(16, 20) + "-" + h.slice(20);
+  }
+  function el(tag, attrs, ...children) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (k === "class") node.className = v; else if (k.startsWith("on")) node.addEventListener(k.slice(2), v); else node.setAttribute(k, v);
+    }
+    for (const c of children) if (c !== null && c !== undefined) node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    return node;
+  }
+
+  // ---------- API ----------
+  async function api(path, options = {}) {
+    const headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
+    if (state.token) headers.Authorization = "Bearer " + state.token;
+    const resp = await fetch(path, Object.assign({}, options, { headers }));
+    let body = null;
+    try { body = await resp.json(); } catch (e) { body = null; }
+    if (resp.status === 401 && state.token) expire();
+    return { status: resp.status, ok: resp.ok, body, headers: resp.headers };
+  }
+
+  // ---------- sign in ----------
+  if (LOCAL) {
+    $("quickpick").classList.remove("hidden");
+    $("quickpick").addEventListener("click", (e) => {
+      const user = e.target.getAttribute && e.target.getAttribute("data-user");
+      if (!user) return;
+      $("username").value = user;  // the username only, never a password
+      $("password").focus();
+    });
+  }
+  $("signin").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("session-message").textContent = "";
+    const resp = await api("/v1/auth/token", {
+      method: "POST",
+      body: JSON.stringify({ username: $("username").value.trim(), password: $("password").value }),
+    });
+    $("password").value = "";
+    if (!resp.ok) { $("session-message").textContent = plainError(resp.status, resp.body); return; }
+    state.token = resp.body.access_token;
+    state.role = resp.body.role;
+    state.username = $("username").value.trim();
+    state.accountId = tokenAccount(state.token);
+    clearTimeout(state.expiryTimer);
+    state.expiryTimer = setTimeout(expire, resp.body.expires_in * 1000);
+    startSession();
+  });
+  function tokenAccount(token) {
+    try {
+      const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+      return payload.account_id || null;
+    } catch (e) { return null; }
+  }
+  $("signout").addEventListener("click", () => endSession(""));
+  function expire() { endSession("Session expired, sign in again."); }
+  function endSession(message) {
+    state.token = null; state.role = null; state.accountId = null; state.last = null; state.current = null;
+    clearTimeout(state.expiryTimer); stopPolling();
+    $("app").classList.add("hidden"); $("whoami").classList.add("hidden"); $("signin").classList.remove("hidden");
+    $("session-message").textContent = message;
+    $("pay-view").classList.add("hidden"); $("pay-empty").classList.remove("hidden");
+  }
+  const ROLE_NAMES = { client: "customer", operator: "bank staff", viewer: "auditor, read-only" };
+  function startSession() {
+    $("signin").classList.add("hidden");
+    $("whoami").classList.remove("hidden");
+    $("whoami-text").textContent = "Signed in as " + state.username + " (" + (ROLE_NAMES[state.role] || state.role) + ")";
+    $("app").classList.remove("hidden");
+    const mayPay = state.role === "client" || state.role === "operator";
+    $("send-panel").classList.toggle("hidden", !mayPay);
+    $("readonly-panel").classList.toggle("hidden", mayPay);
+    const staff = state.role === "operator";
+    $("recon-panel").classList.toggle("hidden", !staff);
+    $("dlq-panel").classList.toggle("hidden", !staff);
+    $("btn-again").disabled = true; $("btn-different").disabled = true;
+    refreshAll();
+    if (staff) { runRecon(); loadDlq(); }
+  }
+
+  // ---------- accounts and recent payments ----------
+  async function loadAccounts() {
+    const resp = await api("/v1/accounts?limit=100");
+    if (!resp.ok) return;
+    state.accounts = resp.body;
+    const list = $("accounts"); list.replaceChildren();
+    for (const a of state.accounts) {
+      const balance = a.balance === null ? el("span", { class: "muted" }, "Hidden for your role") : el("span", { class: "amount" }, formatAmount(a.balance, a.currency));
+      list.append(el("li", {}, el("div", { class: "row" }, el("strong", {}, a.holder_name), balance),
+        el("div", { class: "tech" }, a.id + (a.account_type === "system" ? ", bank's own account" : ""))));
+    }
+    fillSelects();
+  }
+  function label(a) { return a.holder_name + " (" + a.id + ")"; }
+  function fillSelects() {
+    const from = $("from"), to = $("to");
+    const keepFrom = from.value, keepTo = to.value;
+    from.replaceChildren();
+    for (const a of state.accounts.filter((a) => a.can_debit)) from.append(el("option", { value: a.id }, label(a)));
+    if ([...from.options].some((o) => o.value === keepFrom)) from.value = keepFrom;
+    to.replaceChildren();
+    for (const a of state.accounts.filter((a) => a.id !== from.value)) to.append(el("option", { value: a.id }, label(a)));
+    if ([...to.options].some((o) => o.value === keepTo)) to.value = keepTo;
+  }
+  $("from").addEventListener("change", fillSelects);
+  $("refresh-accounts").addEventListener("click", loadAccounts);
+  function nameOf(id) { const a = state.accounts.find((x) => x.id === id); return a ? a.holder_name : id; }
+  async function loadRecent() {
+    const resp = await api("/v1/payments?limit=10");
+    const list = $("recent"); list.replaceChildren();
+    if (!resp.ok) { list.append(el("li", { class: "muted" }, plainError(resp.status, resp.body))); return; }
+    if (!resp.body.length) { list.append(el("li", { class: "muted" }, "No payments yet.")); return; }
+    for (const p of resp.body) {
+      list.append(el("li", {}, el("button", {
+        type: "button", class: "list-button",
+        onclick: () => { state.last = null; showPayment(p.payment_id, { fresh: true }); },
+      }, el("div", { class: "row" }, el("span", { class: "amount" }, formatAmount(p.amount, p.currency)),
+          el("span", {}, nameOf(p.from_account_id) + " to " + nameOf(p.to_account_id))),
+         el("div", { class: "tech" }, time(p.created_at) + ", " + p.payment_id))));
+    }
+  }
+  function refreshAll() { loadAccounts(); loadRecent(); }
+
+  // ---------- sending ----------
+  function readForm() {
+    $("send-error").classList.add("hidden");
+    const minor = rupeesToMinor($("amount").value);
+    if (minor === null) { return fail("Enter an amount in rupees, for example 500 or 500.50."); }
+    const from = state.accounts.find((a) => a.id === $("from").value);
+    if (!from) return fail("Choose an account to send from.");
+    if (!$("to").value) return fail("Choose an account to send to.");
+    const body = {
+      from_account_id: from.id,
+      to_account_id: $("to").value,
+      amount_minor: Number(minor),  // an exact integer of paise, at most 10^12
+      currency: from.currency || "INR",
+    };
+    const note = $("note").value.trim();
+    if (note) body.reference = note;
+    return body;
+  }
+  function fail(text) { $("send-error").textContent = text; $("send-error").classList.remove("hidden"); return null; }
+  function post(body, key) {
+    return api("/v1/payments", { method: "POST", body: JSON.stringify(body), headers: { "Idempotency-Key": key } });
+  }
+  async function send(body, key) {
+    const resp = await post(body, key);
+    handleResponse(resp, { body, key });
+    return resp;
+  }
+  function handleResponse(resp, request) {
+    if (resp.ok) {
+      state.last = request;
+      $("btn-again").disabled = false; $("btn-different").disabled = false;
+      const replayed = resp.headers.get("Idempotency-Replayed") === "true";
+      showPayment(resp.body.payment_id, { replayed });
+      refreshAll();
+    } else {
+      showRefused(plainError(resp.status, resp.body), resp.body);
+    }
+  }
+  $("send-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const body = readForm(); if (!body) return;
+    send(body, uuid());
+  });
+  $("btn-again").addEventListener("click", () => { if (state.last) send(state.last.body, state.last.key); });
+  $("btn-different").addEventListener("click", async () => {
+    if (!state.last) return;
+    const changed = Object.assign({}, state.last.body, { amount_minor: state.last.body.amount_minor + 100 });
+    const resp = await post(changed, state.last.key);
+    if (resp.ok) handleResponse(resp, { body: changed, key: state.last.key });
+    else showRefused(plainError(resp.status, resp.body) + " The amount was changed by ₹1.00 but the request ID was not.", resp.body);
+  });
+  $("btn-ten").addEventListener("click", async () => {
+    const body = readForm(); if (!body) return;
+    const key = uuid();
+    const responses = await Promise.all(Array.from({ length: 10 }, () => post(body, key)));
+    const created = responses.filter((r) => r.status === 201).length;
+    const repeats = responses.filter((r) => r.status === 200 && r.headers.get("Idempotency-Replayed") === "true").length;
+    const waiting = responses.filter((r) => r.status === 409).length;
+    const other = responses.length - created - repeats - waiting;
+    const success = responses.find((r) => r.ok);
+    if (!success) { showRefused(plainError(responses[0].status, responses[0].body), responses[0].body); return; }
+    state.last = { body, key };
+    $("btn-again").disabled = false; $("btn-different").disabled = false;
+    let tally = created + " new, " + repeats + " repeat" + (repeats === 1 ? "" : "s");
+    if (waiting) tally += ", " + waiting + " told to retry because the first was still running";
+    if (other) tally += ", " + other + " other";
+    tally += ". Charged " + (created === 1 ? "once" : created + " times") + ".";
+    showPayment(success.body.payment_id, { tally });
+    refreshAll();
+  });
+
+  // ---------- this payment ----------
+  function setBadge(kind, text) {
+    const icons = { ok: "✓", bad: "✕", wait: "", none: "" };
+    const badge = $("badge"); badge.className = "badge " + kind; badge.replaceChildren();
+    if (kind === "wait") badge.append(el("span", { class: "spinner", "aria-hidden": "true" }));
+    else if (icons[kind]) badge.append(el("span", { "aria-hidden": "true" }, icons[kind]));
+    badge.append(text);
+  }
+  function showRefused(text, body) {
+    stopPolling();
+    $("pay-empty").classList.add("hidden"); $("pay-view").classList.remove("hidden");
+    setBadge("bad", "Refused");
+    $("pay-id").textContent = body && body.error ? body.error.code : "";
+    $("summary").textContent = "No money moved.";
+    $("refused").textContent = text; $("refused").classList.remove("hidden");
+    $("duplicate").classList.add("hidden");
+    $("journey-part").classList.add("hidden");
+    state.traceId = body && body.error ? body.error.trace_id : null; state.eventId = null;
+    updateJaeger();
+  }
+  function showPayment(paymentId, opts) {
+    stopPolling();
+    state.current = paymentId; state.traceId = null;
+    $("pay-empty").classList.add("hidden"); $("pay-view").classList.remove("hidden");
+    $("refused").classList.add("hidden"); $("journey-part").classList.remove("hidden");
+    const dup = $("duplicate");
+    if (opts.tally) { dup.textContent = opts.tally; dup.classList.remove("hidden"); }
+    else if (opts.replayed) { dup.textContent = "This was a repeat of an earlier request. No money moved again."; dup.classList.remove("hidden"); }
+    else dup.classList.add("hidden");
+    $("poll-note").textContent = "";
+    const started = Date.now();
+    const tick = async () => {
+      if (state.current !== paymentId || !state.token) return;
+      const done = await loadJourney(paymentId);
+      if (done || state.current !== paymentId) return;
+      if (Date.now() - started >= 60000) { $("poll-note").textContent = "Still not processed after 60 s."; return; }
+      state.poll = setTimeout(tick, 1000);
+    };
+    tick();
+  }
+  function stopPolling() { clearTimeout(state.poll); state.poll = null; }
+
+  const STEP_TEXT = {
+    received: ["The bank got the request and its request ID.", "idempotency key"],
+    recorded: ["Money left one account and arrived in the other, in one step.", "double-entry postings"],
+    queued: ["A delivery note was saved together with the payment.", "outbox"],
+    sent: ["The note was handed to the message system.", "Kafka"],
+    processed: ["The follow-up work ran, exactly once.", "consumer"],
+  };
+  async function loadJourney(paymentId) {
+    const resp = await api("/v1/payments/" + encodeURIComponent(paymentId) + "/journey");
+    if (state.current !== paymentId) return true;
+    if (!resp.ok) { showRefused(plainError(resp.status, resp.body), resp.body); return true; }
+    const j = resp.body;
+    state.eventId = j.event_id; updateJaeger();
+    $("pay-id").textContent = j.payment.id;
+    const labels = { completed: ["ok", "Completed"], in_progress: ["wait", "In progress"], failed: ["bad", "Failed"] };
+    const [kind, text] = labels[j.overall];
+    setBadge(kind, text);
+    $("summary").textContent = j.summary;
+
+    const tracker = $("tracker"); tracker.replaceChildren();
+    const firstOpen = j.stages.findIndex((s) => !s.done);
+    j.stages.forEach((s, i) => {
+      const icon = s.done ? el("span", { class: "icon done", "aria-hidden": "true" }, "✓")
+        : (i === firstOpen && j.overall === "in_progress") ? el("span", { class: "spinner", "aria-hidden": "true" })
+        : el("span", { class: "icon todo", "aria-hidden": "true" });
+      const [explain, tech] = STEP_TEXT[s.key];
+      tracker.append(el("li", { class: s.done ? "done" : "" },
+        el("div", { class: "step-head" }, icon, el("span", {}, (i + 1) + ". " + s.label)),
+        el("div", { class: "step-time" + (s.done ? "" : " muted") }, s.done ? "Done at " + time(s.at) : s.note),
+        el("p", { class: "step-explain" }, explain),
+        el("div", { class: "tech" }, tech)));
+    });
+
+    renderParty($("sender"), j.parties.sender);
+    renderParty($("receiver"), j.parties.receiver);
+
+    const ledger = $("ledger"); ledger.replaceChildren();
+    for (const e of j.ledger_entries) {
+      const out = e.direction === "money out";
+      ledger.append(el("tr", {},
+        el("td", {}, (e.holder_name || e.account_id), el("div", { class: "tech" }, e.account_id)),
+        el("td", {}, out ? "Money out" : "Money in"),
+        el("td", { class: "num amount " + (out ? "out" : "in") }, formatAmount(e.amount, j.payment.currency))));
+    }
+    const zero = j.ledger_sum === "0.0000";
+    const lb = $("ledger-badge");
+    lb.className = "pill " + (zero ? "ok" : "bad");
+    lb.textContent = zero ? "✓ Balances to zero: money out equals money in" : "✕ Does not balance: sum is " + j.ledger_sum;
+
+    const failures = $("failures"); failures.replaceChildren();
+    if (!j.dead_letters.length) failures.append(el("p", { class: "muted" }, "No failures recorded."));
+    for (const d of j.dead_letters) {
+      failures.append(el("div", { class: "message bad" },
+        el("div", {}, "Parked for staff review at " + time(d.created_at) + " after " + d.attempts + " attempt" + (d.attempts === 1 ? "" : "s") + "."),
+        el("div", {}, d.replayed_at ? "Sent again by staff at " + time(d.replayed_at) + "." : "Not sent again yet."),
+        el("div", { class: "tech" }, d.reason)));
+    }
+    return j.overall === "completed" || j.overall === "failed";
+  }
+  async function renderParty(node, party) {
+    node.replaceChildren();
+    if (!party) { node.append(el("span", { class: "muted" }, "Not recorded")); return; }
+    node.append(el("strong", {}, party.holder_name || party.id), el("div", { class: "tech" }, party.id + (party.account_type === "system" ? ", bank's own account" : "")));
+    const balance = el("div", { class: "muted" }, "Balance: checking");
+    node.append(balance);
+    const mayRead = state.role === "operator" || state.role === "viewer" || party.id === state.accountId;
+    if (!mayRead) { balance.textContent = "Balance: Hidden for your role"; return; }
+    const resp = await api("/v1/accounts/" + encodeURIComponent(party.id));
+    balance.textContent = resp.ok ? "Balance: " + formatAmount(resp.body.balance, resp.body.currency) : "Balance: Hidden for your role";
+  }
+  function updateJaeger() {
+    const link = $("jaeger-link");
+    if (state.traceId) { link.href = "http://localhost:16686/trace/" + state.traceId; link.textContent = "Jaeger trace for this request"; }
+    else if (state.eventId) {
+      link.href = "http://localhost:16686/search?service=api&tags=" + encodeURIComponent(JSON.stringify({ event_id: state.eventId }));
+      link.textContent = "Find this payment's trace in Jaeger";
+    } else { link.href = "http://localhost:16686"; link.textContent = "Jaeger traces"; }
+  }
+
+  // ---------- staff panels ----------
+  const CHECKS = {
+    no_duplicate_event_ids: "No payment was processed twice",
+    ledger_balances_to_zero: "All money out equals all money in",
+    outbox_fully_published: "Every payment was handed on for processing",
+    no_negative_balances: "No customer account is below zero",
+  };
+  async function runRecon() {
+    const list = $("recon"); list.replaceChildren(el("li", { class: "muted" }, "Checking..."));
+    const resp = await api("/v1/admin/reconciliation");
+    if (resp.status === 403) { $("recon-panel").classList.add("hidden"); return; }
+    list.replaceChildren();
+    if (!resp.ok) { list.append(el("li", { class: "muted" }, plainError(resp.status, resp.body))); return; }
+    for (const c of resp.body.checks) {
+      const words = c.status === "pass" ? ["ok", "✓ Yes"] : c.status === "warn" ? ["wait", "! Catching up"] : ["bad", "✕ No"];
+      list.append(el("li", { class: "row" }, el("span", { class: "pill " + words[0] }, words[1]), el("span", {}, CHECKS[c.name] || c.name)));
+    }
+    list.append(el("li", { class: "tech" }, "Checked at " + time(resp.body.checked_at)));
+  }
+  $("run-recon").addEventListener("click", runRecon);
+
+  function plainReason(reason) {
+    if (reason.startsWith("permanent")) return "Could not be read or was invalid, so it was parked.";
+    if (reason.startsWith("transient")) return "Kept failing after every retry, so it was parked.";
+    return "Parked for review.";
+  }
+  async function loadDlq() {
+    $("dlq-count").textContent = "Counting...";
+    const list = $("dlq"); list.replaceChildren();
+    let after = null, count = 0, newest = [], pages = 0, capped = false;
+    while (true) {
+      const resp = await api("/v1/dlq?replayed=false&limit=200" + (after !== null ? "&after_id=" + after : ""));
+      if (resp.status === 403) { $("dlq-panel").classList.add("hidden"); return; }
+      if (!resp.ok) { $("dlq-count").textContent = plainError(resp.status, resp.body); return; }
+      count += resp.body.items.length;
+      newest = newest.concat(resp.body.items).slice(-5);
+      after = resp.body.next_after_id; pages += 1;
+      if (after === null) break;
+      if (pages >= 100) { capped = true; break; }
+    }
+    $("dlq-count").textContent = (capped ? "More than " : "") + count + " waiting for staff review.";
+    for (const d of newest.reverse()) {
+      list.append(el("li", {}, el("div", {}, plainReason(d.reason)),
+        el("div", { class: "tech" }, "#" + d.id + ", " + time(d.created_at) + ", " + d.reason.slice(0, 120))));
+    }
+    if (!newest.length) list.append(el("li", { class: "muted" }, "None."));
+  }
+  $("refresh-dlq").addEventListener("click", loadDlq);
+})();
+</script>
+</body>
+</html>

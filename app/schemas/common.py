@@ -53,6 +53,19 @@ class AccountOut(Model):
     created_at: dt.datetime
 
 
+class AccountListItem(Model):
+    """One row of GET /v1/accounts. A field the caller may not see is null,
+    never zero or empty (decisions D4 and D26)."""
+
+    id: str
+    holder_name: str
+    currency: str | None
+    account_type: str | None
+    balance: str | None = Field(..., description="Derived from postings, scale 4; null if hidden")
+    balance_minor: int | None
+    can_debit: bool
+
+
 class PostingOut(Model):
     id: int
     transaction_id: str

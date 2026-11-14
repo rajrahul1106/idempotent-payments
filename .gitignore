@@ -14,7 +14,9 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
-BLUEPRINT.md
+BLUEPRINT*.md
+.claude/
+Claude outputs/
 
 # Raw chaos manifests (every request and response), kept on disk only
 docs/results/manifests/chaos-*.jsonl.gz

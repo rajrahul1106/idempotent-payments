@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from opentelemetry import trace
 from sqlalchemy.exc import OperationalError
@@ -23,6 +23,7 @@ from app.core.telemetry import current_traceparent, key_digest
 from app.db.errors import database_unavailable
 from app.db.models.ledger import Transaction
 from app.schemas.payments import PaymentRequest
+from app.services import payment_views
 from app.services.payment import Actor, PaymentCommand, create_payment
 
 router = APIRouter(tags=["payments"])
@@ -107,6 +108,58 @@ def _create(body: PaymentRequest, idempotency_key, traceparent, principal: Princ
     return result
 
 
+class PaymentNotFound(DomainError):
+    status_code = 404
+    code = "payment_not_found"
+
+
+def _require_party(principal: Principal, parties) -> None:
+    """D4: viewer and operator read any payment; a client only one it pays
+    or receives. Shared by GET /v1/payments/{id} and its journey."""
+    if principal.role not in READ_ALL_ROLES and principal.account_id not in parties:
+        raise HTTPException(
+            status_code=403,
+            detail="Clients may read only payments they pay or receive",
+        )
+
+
+@router.get("/payments")
+def list_payments(
+    account_id: str | None = Query(None, description="Only payments with a posting on this account"),
+    limit: int = Query(20, ge=1, le=100),
+    principal: Principal = Depends(require_role("viewer")),
+    session: Session = Depends(db_session),
+) -> JSONResponse:
+    """Recent payments, newest first. A client sees only payments touching
+    its own account, and asking for another account is 403."""
+    if principal.role not in READ_ALL_ROLES:
+        if account_id is not None and account_id != principal.account_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Clients may list only payments on their own account",
+            )
+        account_id = principal.account_id
+        if account_id is None:
+            return JSONResponse(status_code=200, content=[])
+    return JSONResponse(
+        status_code=200,
+        content=payment_views.recent_payments(session, account_id=account_id, limit=limit),
+    )
+
+
+@router.get("/payments/{payment_id}/journey")
+def payment_journey(
+    payment_id: str,
+    principal: Principal = Depends(require_role("viewer")),
+) -> JSONResponse:
+    """Every recorded stage of one payment, from one database snapshot."""
+    result = payment_views.journey(payment_id)
+    if result is None:
+        raise PaymentNotFound(f"Payment {payment_id} not found")
+    _require_party(principal, result.party_ids)
+    return JSONResponse(status_code=200, content=result.body)
+
+
 @router.get("/payments/{payment_id}")
 def get_payment(
     payment_id: str,
@@ -115,22 +168,10 @@ def get_payment(
     principal: Principal = Depends(require_role("viewer")),
     session: Session = Depends(db_session),
 ) -> JSONResponse:
-    from app.core.exceptions import DomainError as _DomainError
-
     transaction = session.get(Transaction, payment_id)
     if transaction is None:
-        class _NotFound(_DomainError):
-            status_code = 404
-            code = "payment_not_found"
-
-        raise _NotFound(f"Payment {payment_id} not found")
-
-    parties = {posting.account_id for posting in transaction.postings}
-    if principal.role not in READ_ALL_ROLES and principal.account_id not in parties:
-        raise HTTPException(
-            status_code=403,
-            detail="Clients may read only payments they pay or receive",
-        )
+        raise PaymentNotFound(f"Payment {payment_id} not found")
+    _require_party(principal, {posting.account_id for posting in transaction.postings})
 
     return JSONResponse(
         status_code=200,

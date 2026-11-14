@@ -1,6 +1,6 @@
 # API
 
-Every example below was run against the local stack (`make up`) on 12 Nov 2026, and the response under it is the one it returned, unedited except for line breaks in JSON. Only the status line and a few headers are shown (`Content-Type`, `X-Request-Id`, `Idempotency-Replayed`, `Retry-After`). The interactive OpenAPI page is at http://localhost:8000/docs once the stack is up.
+Every example below was run against the local stack (`make up`) on 12 Nov 2026 (the demo page endpoints on 14 Nov 2026), and the response under it is the one it returned, unedited except for line breaks in JSON. Only the status line and a few headers are shown (`Content-Type`, `X-Request-Id`, `Idempotency-Replayed`, `Retry-After`). The interactive OpenAPI page is at http://localhost:8000/docs once the stack is up.
 
 ## Conventions
 
@@ -18,10 +18,14 @@ Every example below was run against the local stack (`make up`) on 12 Nov 2026, 
 | --- | --- | --- | --- |
 | POST | `/v1/auth/token` | anyone | Exchange a username and password for a token |
 | POST | `/v1/accounts` | operator | Create an account |
+| GET | `/v1/accounts` | any signed-in role | The accounts the caller may see, with `can_debit` (`limit` 1 to 500, default 100) |
 | GET | `/v1/accounts/{account_id}` | viewer, operator; a client for its own account | Account and its derived balance |
 | GET | `/v1/accounts/{account_id}/postings` | as above | Posting history, newest first (`limit` 1 to 200, `offset`) |
 | POST | `/v1/payments` | client (own source account), operator | Move money; idempotent by key |
+| GET | `/v1/payments` | viewer, operator; a client for its own account | Recent payments, newest first (`account_id`, `limit` 1 to 100, default 20) |
 | GET | `/v1/payments/{payment_id}` | viewer, operator; a client that pays or receives it | One payment and its postings |
+| GET | `/v1/payments/{payment_id}/journey` | as above | Every recorded stage of one payment |
+| GET | `/demo` | anyone | The demo page (static HTML; it signs in and calls the endpoints above) |
 | GET | `/v1/dlq` | operator | Dead letters, oldest first (`limit`, `after_id`, `reason` prefix, `replayed`) |
 | POST | `/v1/dlq/{message_id}/replay` | operator | Republish one dead letter to the main topic |
 | GET | `/v1/admin/reconciliation` | operator | Run the four invariant checks now |
@@ -735,5 +739,287 @@ x-request-id: req_9853e220604542f3
       "offending_accounts": 0
     }
   ]
+}
+```
+
+## Demo page endpoints
+
+Read-only endpoints added for the demo page at http://localhost:8000/demo. None of them writes, and none changes who may move money: `POST /v1/payments` still enforces decision D4 itself. `PAYMENT` below is the newest payment from `GET /v1/payments`.
+
+#### GET /v1/accounts, as a client
+
+Who sees what (decisions D4 and D26, docs/ARCHITECTURE.md §16). A client sees its own account in full, plus every customer account by id and holder name only, so it can choose whom to pay. Fields it may not see are `null`, never zero. It sees no system accounts. `can_debit` comes from the same function the payment service enforces. Accounts are listed oldest first (`limit` 1 to 500, default 100), so the seeded accounts come first; a client's own account is always included.
+
+```bash
+curl -si "$API/v1/accounts?limit=4" -H "Authorization: Bearer $ALICE"
+```
+
+```http
+HTTP/1.1 200 OK
+content-type: application/json
+x-request-id: req_029c022b63fc4ffd
+
+[
+  {
+    "id": "acc_alice",
+    "holder_name": "Alice Sharma",
+    "currency": "INR",
+    "account_type": "customer",
+    "balance": "3423.0500",
+    "balance_minor": 342305,
+    "can_debit": true
+  },
+  {
+    "id": "acc_bob",
+    "holder_name": "Bob Mehta",
+    "currency": null,
+    "account_type": null,
+    "balance": null,
+    "balance_minor": null,
+    "can_debit": false
+  },
+  {
+    "id": "acc_carol",
+    "holder_name": "Carol Nair",
+    "currency": null,
+    "account_type": null,
+    "balance": null,
+    "balance_minor": null,
+    "can_debit": false
+  },
+  {
+    "id": "acc_d241c71b7d4c43458178",
+    "holder_name": "Drill 0",
+    "currency": null,
+    "account_type": null,
+    "balance": null,
+    "balance_minor": null,
+    "can_debit": false
+  }
+]
+```
+
+#### GET /v1/accounts, as an operator
+
+viewer and operator see every account, system accounts included, with balances. An operator may debit any of them (`can_debit: true`); a viewer none.
+
+```bash
+curl -si "$API/v1/accounts?limit=5" -H "Authorization: Bearer $OPERATOR"
+```
+
+```http
+HTTP/1.1 200 OK
+content-type: application/json
+x-request-id: req_1a94487c170e4491
+
+[
+  {
+    "id": "acc_alice",
+    "holder_name": "Alice Sharma",
+    "currency": "INR",
+    "account_type": "customer",
+    "balance": "3423.0500",
+    "balance_minor": 342305,
+    "can_debit": true
+  },
+  {
+    "id": "acc_bob",
+    "holder_name": "Bob Mehta",
+    "currency": "INR",
+    "account_type": "customer",
+    "balance": "25760.4500",
+    "balance_minor": 2576045,
+    "can_debit": true
+  },
+  {
+    "id": "acc_carol",
+    "holder_name": "Carol Nair",
+    "currency": "INR",
+    "account_type": "customer",
+    "balance": "10250.5000",
+    "balance_minor": 1025050,
+    "can_debit": true
+  },
+  {
+    "id": "sys_fees",
+    "holder_name": "Fee Income",
+    "currency": "INR",
+    "account_type": "system",
+    "balance": "0.0000",
+    "balance_minor": 0,
+    "can_debit": true
+  },
+  {
+    "id": "sys_settlement",
+    "holder_name": "Bank Settlement",
+    "currency": "INR",
+    "account_type": "system",
+    "balance": "-719731000.0000",
+    "balance_minor": -71973100000,
+    "can_debit": true
+  }
+]
+```
+
+#### GET /v1/payments
+
+Newest first. A client sees only payments with a posting on its own account; viewer and operator see all, or one account's with `account_id`. `amount` is a decimal string with four places, `amount_minor` an integer.
+
+```bash
+curl -si "$API/v1/payments?limit=2" -H "Authorization: Bearer $ALICE"
+```
+
+```http
+HTTP/1.1 200 OK
+content-type: application/json
+x-request-id: req_130ea7fe9bb6406a
+
+[
+  {
+    "payment_id": "pay_df0865b38a094dbeac3ab6b4",
+    "status": "posted",
+    "amount": "100.0000",
+    "amount_minor": 10000,
+    "currency": "INR",
+    "from_account_id": "acc_alice",
+    "to_account_id": "acc_bob",
+    "created_at": "2026-11-13T09:15:42.658300+00:00"
+  },
+  {
+    "payment_id": "pay_30525a6d2e314d929ee53f91",
+    "status": "posted",
+    "amount": "100.0000",
+    "amount_minor": 10000,
+    "currency": "INR",
+    "from_account_id": "acc_alice",
+    "to_account_id": "acc_bob",
+    "created_at": "2026-11-13T09:14:24.093630+00:00"
+  }
+]
+```
+
+#### A client asking for another account's payments: 403
+
+```bash
+curl -si "$API/v1/payments?account_id=acc_bob" -H "Authorization: Bearer $ALICE"
+```
+
+```http
+HTTP/1.1 403 Forbidden
+content-type: application/json
+x-request-id: req_02946823a66d49ef
+
+{
+  "error": {
+    "code": "forbidden",
+    "message": "Clients may list only payments on their own account",
+    "request_id": "req_02946823a66d49ef",
+    "trace_id": "b4e90352f61715577062ea964b359058"
+  }
+}
+```
+
+#### GET /v1/payments/{payment_id}/journey
+
+Everything recorded about one payment, read in one REPEATABLE READ snapshot. Every field comes from a database row. Same access as `GET /v1/payments/{payment_id}`; an unknown id is `404 payment_not_found`.
+
+| Stage | Done when this row exists |
+| --- | --- |
+| `received` | the payment's `idempotency_keys` row (`created_at`) |
+| `recorded` | the `transactions` row (`created_at`) |
+| `queued` | the `outbox` row (`created_at`) |
+| `sent` | `outbox.published_at` is set |
+| `processed` | a `processed_events` row for the main consumer group |
+
+The first three are written in one database transaction, so they carry the same time. A stage that is not done has `at: null` and a `note` with the time elapsed since the money moved; nothing is said about why. `overall` is `failed` when a dead letter for the event has not been replayed, else `completed` once processed, else `in_progress`. `ledger_sum` is the sum of the postings and is always `0.0000`. A payment made outside the API (a seed or test fixture) has no `received` stage.
+
+```bash
+curl -si "$API/v1/payments/$PAYMENT/journey" -H "Authorization: Bearer $ALICE"
+```
+
+```http
+HTTP/1.1 200 OK
+content-type: application/json
+x-request-id: req_6af180231648407d
+
+{
+  "payment": {
+    "id": "pay_df0865b38a094dbeac3ab6b4",
+    "status": "posted",
+    "amount": "100.0000",
+    "amount_minor": 10000,
+    "currency": "INR",
+    "reference": null,
+    "created_at": "2026-11-13T09:15:42.658300+00:00"
+  },
+  "parties": {
+    "sender": {
+      "id": "acc_alice",
+      "holder_name": "Alice Sharma",
+      "account_type": "customer"
+    },
+    "receiver": {
+      "id": "acc_bob",
+      "holder_name": "Bob Mehta",
+      "account_type": "customer"
+    }
+  },
+  "ledger_entries": [
+    {
+      "account_id": "acc_alice",
+      "holder_name": "Alice Sharma",
+      "amount": "-100.0000",
+      "direction": "money out"
+    },
+    {
+      "account_id": "acc_bob",
+      "holder_name": "Bob Mehta",
+      "amount": "100.0000",
+      "direction": "money in"
+    }
+  ],
+  "ledger_sum": "0.0000",
+  "event_id": "a8902696-4934-44e8-ba0f-69f0907ea20b",
+  "stages": [
+    {
+      "key": "received",
+      "label": "Request received",
+      "done": true,
+      "at": "2026-11-13T09:15:42.658300+00:00",
+      "note": null
+    },
+    {
+      "key": "recorded",
+      "label": "Money moved in the ledger",
+      "done": true,
+      "at": "2026-11-13T09:15:42.658300+00:00",
+      "note": null
+    },
+    {
+      "key": "queued",
+      "label": "Queued for delivery",
+      "done": true,
+      "at": "2026-11-13T09:15:42.658300+00:00",
+      "note": null
+    },
+    {
+      "key": "sent",
+      "label": "Delivered to processor",
+      "done": true,
+      "at": "2026-11-13T09:15:42.684245+00:00",
+      "note": null
+    },
+    {
+      "key": "processed",
+      "label": "Processed",
+      "done": true,
+      "at": "2026-11-13T09:15:42.692439+00:00",
+      "note": null
+    }
+  ],
+  "dead_letters": [],
+  "overall": "completed",
+  "summary": "100.00 INR moved and every step is complete.",
+  "checked_at": "2026-11-14T17:35:55.993668+00:00"
 }
 ```

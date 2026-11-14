@@ -7,9 +7,10 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.body_limit import MAX_BODY_BYTES, BodySizeLimit
@@ -114,6 +115,17 @@ async def ready() -> JSONResponse:
     return JSONResponse(status_code=200 if db_ok else 503, content=payload)
 
 
+DEMO_PAGE = Path(__file__).resolve().parent / "static" / "demo.html"
+
+
+@app.get("/demo", include_in_schema=False)
+def demo_page() -> FileResponse:
+    """The demo page: one static file with no data and no secrets in it.
+    Everything it shows comes from authenticated /v1 calls it makes itself,
+    so it needs no auth of its own and is not rate limited."""
+    return FileResponse(DEMO_PAGE, media_type="text/html", headers={"Cache-Control": "no-store"})
+
+
 # Imported directly, not discovered: a router that fails to import must stop
 # the process at startup, never leave the API running with its endpoints
 # missing.
@@ -132,7 +144,7 @@ def _instrument() -> None:
     # One server span per request. Probes are not traced. Request and
     # response headers and bodies are not captured (the instrumentation's
     # default), so no bearer token or request body reaches a span.
-    FastAPIInstrumentor.instrument_app(app, excluded_urls="health,ready,metrics")
+    FastAPIInstrumentor.instrument_app(app, excluded_urls="health,ready,metrics,demo")
 
 
 _instrument()

@@ -113,25 +113,44 @@ class PaymentResult:
     replayed: bool
 
 
+def may_debit_source(actor: Actor, account_id: str) -> bool:
+    """D4, first half: an operator debits any account, a client only its own."""
+    if actor.role == "operator":
+        return True
+    return (
+        actor.role == "client"
+        and actor.account_id is not None
+        and actor.account_id == account_id
+    )
+
+
+def may_debit_account_type(actor: Actor, account_type: str) -> bool:
+    """D4, second half: only an operator debits a system account.
+
+    System accounts skip the balance check, so debiting one creates money.
+    """
+    return account_type != "system" or actor.role == "operator"
+
+
+def can_debit(actor: Actor, account_id: str, account_type: str) -> bool:
+    """The whole D4 debit rule, both halves. What GET /v1/accounts reports as
+    can_debit. The write path applies the same two functions at the two
+    points it can: the first before the idempotency lookup, the second under
+    the account lock."""
+    return may_debit_source(actor, account_id) and may_debit_account_type(actor, account_type)
+
+
 def _authorize_source(command: PaymentCommand) -> None:
-    """D4, first half: an operator debits any account, a client only its own.
+    """D4, first half, enforced.
 
     Runs before the idempotency lookup, so a caller who does not own the
     source account cannot replay someone else's stored response either.
     The system-account half needs the account row and runs under the lock.
     """
-    actor = command.actor
-    if actor.role == "operator":
-        return
-    if (
-        actor.role == "client"
-        and actor.account_id is not None
-        and actor.account_id == command.from_account_id
-    ):
-        return
-    raise Forbidden(
-        f"Role '{actor.role}' may not debit account {command.from_account_id}"
-    )
+    if not may_debit_source(command.actor, command.from_account_id):
+        raise Forbidden(
+            f"Role '{command.actor.role}' may not debit account {command.from_account_id}"
+        )
 
 
 def create_payment(command: PaymentCommand) -> PaymentResult:
@@ -254,7 +273,7 @@ def _post_payment(
 
     # D4, second half: system accounts skip the balance check below, so
     # debiting one creates money. Only an operator may do it.
-    if source.account_type == "system" and command.actor.role != "operator":
+    if not may_debit_account_type(command.actor, source.account_type):
         raise Forbidden(f"Only an operator may debit system account {source.id}")
 
     for account in (source, destination):

@@ -130,6 +130,14 @@ Other targets:
 - `make baseline`: the steady-state steps, about 12 minutes
 - `make down`: stop everything and delete the volumes
 
+## Try the demo page
+
+With the stack up, open **http://localhost:8000/demo** and sign in as `alice` (a customer), `operator` (bank staff) or `auditor` (read-only); the development passwords are in `scripts/seed.py`.
+Send money and watch the payment go through each step: request received, money moved in the ledger, queued, delivered and processed.
+Send the same request again, or ten copies at once, to see a repeat answered without charging twice.
+
+![The demo page after Alice sends 500.00 to Bob: all five steps complete and the ledger balances to zero](docs/images/demo-payment.png)
+
 ## Design decisions
 
 Each decision, with its alternatives, is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#13-rejected-alternatives).

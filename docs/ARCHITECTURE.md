@@ -228,7 +228,7 @@ Deliberately excluded: Kubernetes (no guarantee changes at this size), more serv
 
 ## 7. API
 
-Nine `/v1` endpoints plus `/health`, `/ready` and `/metrics`. Only `POST /v1/payments` carries idempotency semantics, because it is the only one that moves money. Every endpoint, with a curl example run against the stack and its real response, is in [docs/API.md](API.md).
+Twelve `/v1` endpoints plus `/health`, `/ready`, `/metrics` and `/demo`. Only `POST /v1/payments` carries idempotency semantics, because it is the only one that moves money. Every endpoint, with a curl example run against the stack and its real response, is in [docs/API.md](API.md).
 
 **Authentication.** A bearer JWT (HS256, 15 minutes) from `POST /v1/auth/token`, against the seeded `auth_users` table with argon2id hashes. Roles: `viewer` reads, `client` pays, `operator` manages accounts, the DLQ and reconciliation. An unknown username is verified against a real argon2 hash, so it takes as long as a wrong password.
 
@@ -237,6 +237,14 @@ Nine `/v1` endpoints plus `/health`, `/ready` and `/metrics`. Only `POST /v1/pay
 **Errors.** One body shape on every endpoint: `{"error": {"code", "message", "request_id", "trace_id"}}`, where `trace_id` is the request's trace, so a failed request can be found from its error alone.
 
 **Limits.** Bodies over 64 KB are refused with 413 before anything parses them; `metadata` is at most 2 KB; `reference` at most 64 characters; `amount_minor` from 1 to 10^12. A token subject may make 100 requests a minute (429 with `Retry-After`).
+
+### 7.1 The demo page
+
+`GET /demo` serves one static file, `app/static/demo.html`: inline CSS and JavaScript, no build step, nothing loaded from elsewhere. It holds no data and no secrets. It signs in through `POST /v1/auth/token` like any client, keeps the token in memory only, and shows only what its role's `/v1` calls return. It changes nothing about how payments are written, locked, published or deduplicated; it adds three read-only endpoints:
+
+- `GET /v1/accounts`: the accounts the caller may see (D26), each with `can_debit`. `can_debit` is `app/services/payment.py`'s `can_debit`, the same two functions the write path enforces (one before the idempotency lookup, one under the account lock), so the page and the API cannot disagree. The page uses it only to fill its "From" list; `POST /v1/payments` still refuses anything else.
+- `GET /v1/payments`: recent payments, newest first; a client sees only its own account's.
+- `GET /v1/payments/{payment_id}/journey`: one payment's recorded stages (request received, ledger written, outbox row, published, processed by the main consumer group), its postings and their sum, and its dead letters, read in one REPEATABLE READ snapshot. Every field is a database row; a stage without a row is reported as not done, with the elapsed time, and nothing is guessed about why.
 
 ## 8. The write path, step by step
 
@@ -413,7 +421,9 @@ app/
                 errors.py ("is the database unreachable", shared by API and consumers)
   schemas/      Pydantic request and response models
   services/     payment.py (owns the write transaction), idempotency, payment_events
-                (the consumer's side effect), dlq, reconciliation
+                (the consumer's side effect), dlq, reconciliation, payment_views
+                (the demo page's read-only queries)
+  static/       demo.html, served at /demo
   messaging/    producer, relay, consumer_base, consumer, retry_tier, dlq_writer,
                 failures (D5 classifier), topics, topic_setup, lag
 migrations/     Alembic versions 0001 to 0003
@@ -500,6 +510,7 @@ Numbered as the code cites them.
 | D23 | Chaos runs are sized for the measurement machine (20,000 operations per scenario), with a 300 MB free-memory floor below which a run is INVALID, never FAILED. The client retries 503 and 409 with the same key | An OOM is not a correctness result. Every run is judged against its own manifest |
 | D24 | The state machine checks I1 to I4 per step on the example's own accounts and events, and on the whole database once at the end; it includes a concurrent withdrawal rule and a crash between the consumer's two commits | Checked over the whole database per step, one example's violation failed every later example, and Hypothesis could not shrink it |
 | D25 | Throughput is measured by a separate steady-state baseline (concurrency 4 to 64, 2 minutes each, no faults, run first on a cool machine). "Sustained" is the highest step with p99 under 500 ms and no status but 200 or 201. Each run records its start and end, power source, CPU seconds per container and for the VM, and a CPU benchmark before and after | Throughput on a fanless laptop depends on its temperature, so each figure is reported with its time and the CPU evidence beside it |
+| D26 | `GET /v1/accounts` gives a client a directory: its own account in full, plus every customer account's id and holder name, so it can choose whom to pay. Currency, type, balance and `balance_minor` of other accounts are `null`, never zero, and system accounts are not listed. viewer and operator see every account with its balance. This is a new, deliberate exposure: before it, a client could see no other account's holder name | A signed-in client can list customer names. Balances stay private: a client still reads only its own balance and its own payments, and debits only its own account (D4, enforced by `POST /v1/payments`). The list is oldest first with a `limit` (default 100, at most 500), and a client's own account is always included |
 
 ### Accepted deviations from the original design
 
