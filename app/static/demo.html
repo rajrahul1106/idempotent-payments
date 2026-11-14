@@ -3,10 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Payments demo</title>
 <link rel="icon" href="data:,">
 <style>
   :root {
+    /* Native scrollbars and form controls follow the theme. */
+    color-scheme: light dark;
     --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #5d6673; --faint: #8a93a0;
     --line: #dde1e6; --accent: #2457c5; --accent-text: #ffffff;
     --ok: #157f3b; --ok-bg: #e6f4ea; --warn: #8a5a00; --warn-bg: #fff4d6;
@@ -16,6 +19,7 @@
   }
   @media (prefers-color-scheme: dark) {
     :root {
+      color-scheme: dark;
       --bg: #111418; --panel: #1a1e24; --text: #e6e9ed; --muted: #a3acb8; --faint: #7d8794;
       --line: #2c323a; --accent: #7aa2ff; --accent-text: #0d1220;
       --ok: #6fd491; --ok-bg: #16301f; --warn: #f0c35a; --warn-bg: #33290f;
@@ -29,10 +33,13 @@
   h1 { font-size: 18px; margin: 0 12px 0 0; }
   h2 { font-size: 16px; margin: 0 0 10px; }
   h3 { font-size: 14px; margin: 14px 0 6px; }
-  main { display: grid; gap: var(--gap); padding: var(--gap); grid-template-columns: 1fr; max-width: 1500px; margin: 0 auto; }
-  @media (min-width: 1100px) { main { grid-template-columns: 330px 1fr 360px; align-items: start; } }
-  section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
-  .col { display: grid; gap: var(--gap); align-content: start; }
+  /* minmax(0, ...) and min-width: 0 let columns shrink below their longest
+     unbreakable line, so a long name is cut with an ellipsis, not overflowing. */
+  main { display: grid; gap: var(--gap); padding: var(--gap); grid-template-columns: minmax(0, 1fr); max-width: 1500px; margin: 0 auto; }
+  @media (min-width: 1100px) { main { grid-template-columns: 330px minmax(0, 1fr) 360px; align-items: start; } }
+  section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; min-width: 0; }
+  .col { display: grid; gap: var(--gap); align-content: start; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+  .list-button { display: block; min-width: 0; }
   label { display: block; font-weight: 600; margin: 10px 0 4px; }
   input, select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
   button { font: inherit; cursor: pointer; border-radius: 8px; padding: 8px 12px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
@@ -85,6 +92,12 @@
   ul.plain li:last-child { border-bottom: 0; }
   .list-button { width: 100%; text-align: left; border: 0; background: none; padding: 4px 2px; }
   .list-button:hover { background: var(--bg); }
+  /* Recent payments: always two lines, a long name is cut with an ellipsis. */
+  .pay-line { display: flex; gap: 8px; align-items: baseline; min-width: 0; white-space: nowrap; }
+  .pay-line .amount { flex: none; }
+  .pay-line .parties, .pay-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .pay-meta { display: block; }
+  .toggle { font-size: 13px; padding: 4px 10px; margin-top: 8px; }
   .scroll { max-height: 320px; overflow: auto; }
   .amount { font-variant-numeric: tabular-nums; font-weight: 600; }
   .out { color: var(--bad); }
@@ -208,6 +221,7 @@
     <section class="panel" aria-labelledby="acc-title">
       <div class="row"><h2 id="acc-title">Accounts</h2><button type="button" id="refresh-accounts">Refresh</button></div>
       <ul class="plain scroll" id="accounts"></ul>
+      <button type="button" class="toggle hidden" id="toggle-test" aria-pressed="false" aria-controls="accounts to"></button>
     </section>
     <section class="panel" aria-labelledby="recent-title">
       <h2 id="recent-title">Recent payments</h2>
@@ -356,6 +370,11 @@
     $("app").classList.add("hidden"); $("whoami").classList.add("hidden"); $("signin").classList.remove("hidden");
     $("session-message").textContent = message;
     $("pay-view").classList.add("hidden"); $("pay-empty").classList.remove("hidden");
+    // Nothing the last user could see stays on the page for the next one.
+    state.accounts = []; state.showTest = false; state.traceId = null; state.eventId = null;
+    for (const id of ["accounts", "recent", "recon", "dlq", "from", "to", "tracker", "ledger", "failures", "sender", "receiver"]) $(id).replaceChildren();
+    $("dlq-count").textContent = ""; $("toggle-test").classList.add("hidden");
+    updateJaeger();
   }
   const ROLE_NAMES = { client: "customer", operator: "bank staff", viewer: "auditor, read-only" };
   function startSession() {
@@ -375,47 +394,92 @@
   }
 
   // ---------- accounts and recent payments ----------
+  // The demo accounts scripts/seed.py creates, in the order shown first.
+  // Ids only: names and balances still come from the API.
+  const SEEDED = ["acc_alice", "acc_bob", "acc_carol", "sys_settlement", "sys_fees"];
+  // Accounts generated by the chaos and baseline runs ("chaos <run> <n>"),
+  // scripts/drill.py ("Drill <n>"), the test fixtures ("Test Holder"), the
+  // docs/API.md example ("Dev Patel") and one-character probes. A display
+  // filter only: the API returns them, and the toggle shows them.
+  const GENERATED = /^(chaos\s|drill\s+\d+$|test holder$|dev patel$|.$)/i;
+  function isGenerated(a) { return !SEEDED.includes(a.id) && GENERATED.test(a.holder_name.trim()); }
+  function ordered(accounts) {
+    const rank = (a) => (SEEDED.includes(a.id) ? SEEDED.indexOf(a.id) : SEEDED.length + (isGenerated(a) ? 1 : 0));
+    return accounts.map((a, i) => [a, i]).sort((x, y) => rank(x[0]) - rank(y[0]) || x[1] - y[1]).map(([a]) => a);
+  }
+  function shown(accounts) { return state.showTest ? accounts : accounts.filter((a) => !isGenerated(a)); }
+
   async function loadAccounts() {
     const resp = await api("/v1/accounts?limit=100");
     if (!resp.ok) return;
-    state.accounts = resp.body;
+    state.accounts = ordered(resp.body);
+    renderAccounts();
+  }
+  function renderAccounts() {
     const list = $("accounts"); list.replaceChildren();
-    for (const a of state.accounts) {
+    for (const a of shown(state.accounts)) {
       const balance = a.balance === null ? el("span", { class: "muted" }, "Hidden for your role") : el("span", { class: "amount" }, formatAmount(a.balance, a.currency));
       list.append(el("li", {}, el("div", { class: "row" }, el("strong", {}, a.holder_name), balance),
         el("div", { class: "tech" }, a.id + (a.account_type === "system" ? ", bank's own account" : ""))));
     }
+    const hidden = state.accounts.filter(isGenerated).length;
+    const toggle = $("toggle-test");
+    toggle.classList.toggle("hidden", hidden === 0);
+    toggle.textContent = (state.showTest ? "Hide test accounts (" : "Show test accounts (") + hidden + ")";
+    toggle.setAttribute("aria-pressed", String(!!state.showTest));
     fillSelects();
   }
+  $("toggle-test").addEventListener("click", () => { state.showTest = !state.showTest; renderAccounts(); });
   function label(a) { return a.holder_name + " (" + a.id + ")"; }
   function fillSelects() {
     const from = $("from"), to = $("to");
     const keepFrom = from.value, keepTo = to.value;
     from.replaceChildren();
-    for (const a of state.accounts.filter((a) => a.can_debit)) from.append(el("option", { value: a.id }, label(a)));
+    for (const a of shown(state.accounts).filter((a) => a.can_debit)) from.append(el("option", { value: a.id }, label(a)));
     if ([...from.options].some((o) => o.value === keepFrom)) from.value = keepFrom;
     to.replaceChildren();
-    for (const a of state.accounts.filter((a) => a.id !== from.value)) to.append(el("option", { value: a.id }, label(a)));
+    for (const a of shown(state.accounts).filter((a) => a.id !== from.value)) to.append(el("option", { value: a.id }, label(a)));
     if ([...to.options].some((o) => o.value === keepTo)) to.value = keepTo;
   }
   $("from").addEventListener("change", fillSelects);
   $("refresh-accounts").addEventListener("click", loadAccounts);
-  function nameOf(id) { const a = state.accounts.find((x) => x.id === id); return a ? a.holder_name : id; }
+  const BANK = "Bank (system account)";
+  // A system account the caller cannot see by name (a client is not shown
+  // them) is called the bank. Seeded system account ids start with "sys_".
+  function isSystem(id) {
+    const a = state.accounts.find((x) => x.id === id);
+    return a ? a.account_type === "system" : id.startsWith("sys_");
+  }
+  function nameOf(id) {
+    const a = state.accounts.find((x) => x.id === id);
+    if (a) return a.holder_name;
+    return isSystem(id) ? BANK : id;
+  }
+  function describe(p) {
+    const from = p.from_account_id, to = p.to_account_id;
+    const visible = (id) => state.accounts.some((x) => x.id === id);
+    if (isSystem(from) && !visible(from)) return "Bank deposit to " + nameOf(to);
+    if (isSystem(to) && !visible(to)) return nameOf(from) + " to " + BANK;
+    return nameOf(from) + " to " + nameOf(to);
+  }
   async function loadRecent() {
     const resp = await api("/v1/payments?limit=10");
     const list = $("recent"); list.replaceChildren();
     if (!resp.ok) { list.append(el("li", { class: "muted" }, plainError(resp.status, resp.body))); return; }
     if (!resp.body.length) { list.append(el("li", { class: "muted" }, "No payments yet.")); return; }
     for (const p of resp.body) {
+      const parties = describe(p);
+      const meta = time(p.created_at) + ", " + p.payment_id;
       list.append(el("li", {}, el("button", {
-        type: "button", class: "list-button",
+        type: "button", class: "list-button", title: parties + "\n" + meta,
         onclick: () => { state.last = null; showPayment(p.payment_id, { fresh: true }); },
-      }, el("div", { class: "row" }, el("span", { class: "amount" }, formatAmount(p.amount, p.currency)),
-          el("span", {}, nameOf(p.from_account_id) + " to " + nameOf(p.to_account_id))),
-         el("div", { class: "tech" }, time(p.created_at) + ", " + p.payment_id))));
+      }, el("div", { class: "pay-line" }, el("span", { class: "amount" }, formatAmount(p.amount, p.currency)),
+          el("span", { class: "parties" }, parties)),
+         el("span", { class: "tech pay-meta" }, meta))));
     }
   }
-  function refreshAll() { loadAccounts(); loadRecent(); }
+  // Accounts first: Recent payments names its parties from that list.
+  async function refreshAll() { await loadAccounts(); await loadRecent(); }
 
   // ---------- sending ----------
   function readForm() {
