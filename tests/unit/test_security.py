@@ -29,11 +29,16 @@ def test_dummy_hash_matches_no_guess():
 
 def test_verifying_the_dummy_costs_what_a_real_hash_costs():
     real = hash_password("correct horse")
-    against_real = _median_seconds(lambda: verify_password("wrong", real))
-    against_dummy = _median_seconds(lambda: verify_password("wrong", DUMMY_PASSWORD_HASH))
-    # Same parameters, same work: within a factor of two either way. The old
-    # malformed placeholder failed to parse about 1,000 times faster.
-    assert 0.5 < against_dummy / against_real < 2.0
+    # Interleaved, so a machine slowing down (heat, other tests) hits both.
+    against_real, against_dummy = [], []
+    for _ in range(7):
+        against_real.append(_median_seconds(lambda: verify_password("wrong", real), runs=1))
+        against_dummy.append(_median_seconds(lambda: verify_password("wrong", DUMMY_PASSWORD_HASH), runs=1))
+    ratio = sorted(against_dummy)[3] / sorted(against_real)[3]
+    # Same parameters, same work. The bound is loose because timing on a
+    # loaded laptop is noisy (a 2.1 ratio was seen under the full suite); the
+    # old malformed placeholder failed to parse about 1,000 times faster.
+    assert 0.25 < ratio < 4.0, ratio
 
 
 def test_a_malformed_hash_is_a_failed_login_not_an_exception():

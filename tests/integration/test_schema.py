@@ -37,6 +37,7 @@ TABLES = {
     "reconciliation_runs",
     "payment_events",
     "auth_users",
+    "delivery_failures",
 }
 
 INSERT_TRANSACTION = text(

@@ -19,7 +19,13 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.money import format_amount, to_minor
 from app.db.models.ledger import Account, Posting, Transaction
-from app.db.models.messaging import DlqMessage, IdempotencyKey, OutboxEvent, ProcessedEvent
+from app.db.models.messaging import (
+    DeliveryFailure,
+    DlqMessage,
+    IdempotencyKey,
+    OutboxEvent,
+    ProcessedEvent,
+)
 from app.db.session import SessionFactory
 
 
@@ -131,6 +137,15 @@ def _readable(amount: Decimal, currency: str) -> str:
     return f"{two if two == amount else format_amount(amount)} {currency}"
 
 
+def _delay_label(seconds: int) -> str:
+    """5 -> "5-second", 60 -> "1-minute", 600 -> "10-minute"."""
+    if seconds % 3600 == 0:
+        return f"{seconds // 3600}-hour"
+    if seconds % 60 == 0:
+        return f"{seconds // 60}-minute"
+    return f"{seconds}-second"
+
+
 def _elapsed(seconds: float) -> str:
     seconds = int(max(seconds, 0))
     if seconds < 60:
@@ -195,8 +210,48 @@ def journey(payment_id: str) -> Journey | None:
             if event_id
             else []
         )
+        failures = (
+            list(
+                session.execute(
+                    select(DeliveryFailure).where(DeliveryFailure.event_id == event_id).order_by(DeliveryFailure.id)
+                ).scalars()
+            )
+            if event_id
+            else []
+        )
     finally:
         session.close()
+
+    # Where a recorded failure was sent: a retry queue (with its delay, from
+    # configuration) or the DLQ. Only rows decide what the page may say.
+    queues = {
+        topic: (seconds, _delay_label(seconds))
+        for topic, seconds in zip(settings.retry_topics, settings.retry_tier_seconds)
+    }
+    attempts = [
+        {
+            "attempt": f.attempt,
+            "kind": f.kind,
+            "error": f.error,
+            "sent_to": f.sent_to,
+            "failed_at": _iso(f.failed_at),
+            "retry_in_seconds": queues[f.sent_to][0] if f.sent_to in queues else None,
+            "parked": f.sent_to == settings.kafka_dlq_topic,
+        }
+        for f in failures
+    ]
+    waiting = None
+    if processed is None and failures and failures[-1].sent_to in queues:
+        seconds, delay = queues[failures[-1].sent_to]
+        waiting = {"queue": delay, "seconds": seconds, "since": _iso(failures[-1].failed_at)}
+    # Parked: the newest failure went to the DLQ and no replay has been
+    # recorded for it yet (once staff replay it, it is back in progress).
+    parked = (
+        processed is None
+        and bool(failures)
+        and failures[-1].sent_to == settings.kafka_dlq_topic
+        and not (dead_letters and all(d.replayed_at is not None for d in dead_letters))
+    )
 
     at = {
         "received": key.created_at if key else None,
@@ -216,6 +271,11 @@ def journey(payment_id: str) -> Journey | None:
                 if stage_key == "received"
                 else f"Not processed yet ({since} since the money moved)"
             )
+            # Allowed because it comes from a recorded delivery_failures row.
+            if stage_key == "processed" and waiting is not None:
+                note = f"Waiting in the {waiting['queue']} retry queue"
+            elif stage_key == "processed" and parked:
+                note = "Parked for staff review"
         stages.append({"key": stage_key, "label": label, "done": done, "at": _iso(at[stage_key]), "note": note})
 
     sender_id, receiver_id = _from_to(postings)
@@ -264,6 +324,13 @@ def journey(payment_id: str) -> Journey | None:
     elif processed is not None:
         overall = "completed"
         summary = f"{readable} moved and every step is complete."
+    elif waiting is not None:
+        overall = "in_progress"
+        summary = (
+            f"{readable} moved in the ledger. The follow-up step failed "
+            f"{len(failures)} time{'' if len(failures) == 1 else 's'} and is waiting "
+            f"in the {waiting['queue']} retry queue."
+        )
     else:
         overall = "in_progress"
         last_done = max((i for i, s in enumerate(stages) if s["done"]), default=-1)
@@ -288,6 +355,8 @@ def journey(payment_id: str) -> Journey | None:
         "ledger_sum": format_amount(total),
         "event_id": event_id,
         "stages": stages,
+        "attempts": attempts,
+        "waiting": waiting,
         "dead_letters": letters,
         "overall": overall,
         "summary": summary,

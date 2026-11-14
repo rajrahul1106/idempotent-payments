@@ -107,7 +107,7 @@ Postgres and Kafka (Redpanda locally) are the stateful components; only Postgres
 
 ## 4. Schema
 
-Ten tables. Correctness is enforced by constraints, because application code can be bypassed by the next change and a constraint cannot. Migrations are in `migrations/versions/` (§16, Migrations).
+Eleven tables. Correctness is enforced by constraints, because application code can be bypassed by the next change and a constraint cannot. Migrations are in `migrations/versions/` (§16, Migrations).
 
 | Table | Holds |
 | --- | --- |
@@ -121,6 +121,7 @@ Ten tables. Correctness is enforced by constraints, because application code can
 | `dlq_messages` | Dead letters: payload, reason, attempts, failure history, `traceparent`, `replayed_at` |
 | `reconciliation_runs` | One row per check per run |
 | `auth_users` | Seeded users behind `/v1/auth/token`, argon2id hashes |
+| `delivery_failures` | One row per failed attempt the consumer forwarded to a retry tier or the DLQ: attempt, kind, error, where it went (D27). A record for people, never an input to delivery |
 
 ### Constraints that carry the guarantees
 
@@ -229,7 +230,7 @@ Deliberately excluded: Kubernetes (no guarantee changes at this size), more serv
 
 ## 7. API
 
-Twelve `/v1` endpoints plus `/health`, `/ready`, `/metrics` and `/demo`. Only `POST /v1/payments` carries idempotency semantics, because it is the only one that moves money. Every endpoint, with a curl example run against the stack and its real response, is in [docs/API.md](API.md).
+Thirteen `/v1` endpoints plus `/health`, `/ready`, `/metrics` and `/demo`. Only `POST /v1/payments` carries idempotency semantics, because it is the only one that moves money. Every endpoint, with a curl example run against the stack and its real response, is in [docs/API.md](API.md).
 
 **Authentication.** A bearer JWT (HS256, 15 minutes) from `POST /v1/auth/token`, against the seeded `auth_users` table with argon2id hashes. Roles: `viewer` reads, `client` pays, `operator` manages accounts, the DLQ and reconciliation. An unknown username is verified against a real argon2 hash, so it takes as long as a wrong password.
 
@@ -241,11 +242,14 @@ Twelve `/v1` endpoints plus `/health`, `/ready`, `/metrics` and `/demo`. Only `P
 
 ### 7.1 The demo page
 
-`GET /demo` serves one static file, `app/static/demo.html`: inline CSS and JavaScript, no build step, nothing loaded from elsewhere. It holds no data and no secrets. It signs in through `POST /v1/auth/token` like any client, keeps the token in memory only, and shows only what its role's `/v1` calls return. It changes nothing about how payments are written, locked, published or deduplicated; it adds three read-only endpoints:
+`GET /demo` serves one static file, `app/static/demo.html`: inline CSS and JavaScript, no build step, nothing loaded from elsewhere. It holds no data and no secrets. It signs in through `POST /v1/auth/token` like any client, keeps the token in memory only, and shows only what its role's `/v1` calls return. It changes nothing about how payments are written, locked, published or deduplicated; it adds four read-only endpoints:
 
 - `GET /v1/accounts`: the accounts the caller may see (D26), each with `can_debit`. `can_debit` is `app/services/payment.py`'s `can_debit`, the same two functions the write path enforces (one before the idempotency lookup, one under the account lock), so the page and the API cannot disagree. The page uses it only to fill its "From" list; `POST /v1/payments` still refuses anything else.
 - `GET /v1/payments`: recent payments, newest first; a client sees only its own account's.
-- `GET /v1/payments/{payment_id}/journey`: one payment's recorded stages (request received, ledger written, outbox row, published, processed by the main consumer group), its postings and their sum, and its dead letters, read in one REPEATABLE READ snapshot. Every field is a database row; a stage without a row is reported as not done, with the elapsed time, and nothing is guessed about why.
+- `GET /v1/payments/{payment_id}/journey`: one payment's recorded stages (request received, ledger written, outbox row, published, processed by the main consumer group), its postings and their sum, and its dead letters, read in one REPEATABLE READ snapshot. Every field is a database row; a stage without a row is reported as not done, with the elapsed time, and nothing is guessed about why. It also lists the payment's recorded failed attempts (`delivery_failures`), and when the newest one went to a retry tier and the event is not processed, says which queue it waits in.
+- `GET /v1/demo/config`: `{"demo_faults_enabled": true|false}`, the API process's own switch (D27), so the page offers "simulate a problem" only where it works.
+
+With the switch on (D27), a payment may carry `metadata.demo_fault` (`fail_once`, `fail_twice`, `fail_permanent`) and the main consumer fails it on purpose, through the normal retry tiers and DLQ, so the page can show retries and an operator replay live.
 
 ## 8. The write path, step by step
 
@@ -512,6 +516,7 @@ Numbered as the code cites them.
 | D24 | The state machine checks I1 to I4 per step on the example's own accounts and events, and on the whole database once at the end; it includes a concurrent withdrawal rule and a crash between the consumer's two commits | Checked over the whole database per step, one example's violation failed every later example, and Hypothesis could not shrink it |
 | D25 | Throughput is measured by a separate steady-state baseline (concurrency 4 to 64, 2 minutes each, no faults, run first on a cool machine). "Sustained" is the highest step with p99 under 500 ms and no status but 200 or 201. Each run records its start and end, power source, CPU seconds per container and for the VM, and a CPU benchmark before and after | Throughput on a fanless laptop depends on its temperature, so each figure is reported with its time and the CPU evidence beside it |
 | D26 | `GET /v1/accounts` gives a client a directory: its own account in full, plus every customer account's id and holder name, so it can choose whom to pay. Currency, type, balance and `balance_minor` of other accounts are `null`, never zero, and system accounts are not listed. viewer and operator see every account with its balance. This is a new, deliberate exposure: before it, a client could see no other account's holder name | A signed-in client can list customer names. Balances stay private: a client still reads only its own balance and its own payments, and debits only its own account (D4, enforced by `POST /v1/payments`). The list is oldest first with a `limit` (default 100, at most 500), and a client's own account is always included |
+| D27 | A demo fault switch, `DEMO_FAULTS_ENABLED`, off by default and local only: the settings refuse to load with it on outside `local` or `ci`, through the same environment check that refuses the development JWT secret, so no process starts. Compose turns it on for the API, the consumer and the retry tiers of the local stack. With it on, a payment may carry `metadata.demo_fault`: `fail_once` (a transient error on attempt 0), `fail_twice` (attempts 0 and 1) or `fail_permanent` (a permanent error). **Fault read from the payment row, event format unchanged:** the consumer looks up `transactions.metadata->>'demo_fault'` for the event's transaction, by primary key, only when the switch is on; a missing row or any other value is no fault. An operator replay (`replay_of` header) is never faulted. With the switch off the API refuses `demo_fault` with 422 `demo_faults_disabled` before any write, and the consumer does not install the check at all. Each failure the consumer forwards is recorded in `delivery_failures`, in its own short transaction after the offset commit, best-effort | Why it is safe: the fault runs where the side effect runs, inside the event's transaction, so it rolls back with it and goes through the normal D5 classification, D7 forward-then-commit and D9 hold; nothing about those changes. The money has already moved in the API transaction, so a simulated failure delays only the follow-up step. With the switch off no code path reads `demo_fault`. A lost `delivery_failures` row changes nothing about delivery; it only leaves a gap in the page's timeline. The retry tiers read the setting but never act on it; only the main consumer fails messages |
 
 ### Accepted deviations from the original design
 
@@ -532,3 +537,5 @@ The balance trigger raises SQLSTATE 23514 (`check_violation`). The write path lo
 | 0001 | Initial schema |
 | 0002 | `payment_events.amount_minor BIGINT` becomes `payment_events.amount NUMERIC(20,4)`, the same representation as `postings.amount`. It refuses to run on a non-empty table, because converting money belongs to `app/core/money.py`, not to SQL |
 | 0003 | `dlq_messages.traceparent` and `dlq_messages.failure_history` |
+| 0004 | Index on `idempotency_keys(transaction_id)`, built concurrently, for the journey view |
+| 0005 | `delivery_failures`: one row per failed attempt the consumer forwards (D27) |

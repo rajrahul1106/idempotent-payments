@@ -18,7 +18,8 @@ from app.api.deps import (
     require_role,
 )
 from app.core import metrics
-from app.core.exceptions import DomainError, IdempotencyKeyReuse
+from app.core.config import settings
+from app.core.exceptions import DemoFaultsDisabled, DomainError, IdempotencyKeyReuse
 from app.core.telemetry import current_traceparent, key_digest
 from app.db.errors import database_unavailable
 from app.db.models.ledger import Transaction
@@ -79,6 +80,12 @@ def _create(body: PaymentRequest, idempotency_key, traceparent, principal: Princ
         uuid.UUID(idempotency_key)
     except ValueError:
         raise MissingIdempotencyKey("Idempotency-Key must be a UUID")
+
+    # D27: the demo page's fault switch is this process's own setting. With
+    # it off, a payment asking for a fault is refused here, before the
+    # idempotency key or anything else is written.
+    if not settings.demo_faults_enabled and "demo_fault" in (body.metadata or {}):
+        raise DemoFaultsDisabled("Demo faults are disabled on this server")
 
     # Attributes on the request's server span (§5.8). The key is hashed:
     # a raw idempotency key never goes into a trace.

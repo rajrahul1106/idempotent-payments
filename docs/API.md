@@ -25,6 +25,7 @@ Every example below was run against the local stack (`make up`) on 12 Nov 2026 (
 | GET | `/v1/payments` | viewer, operator; a client for its own account | Recent payments, newest first (`account_id`, `limit` 1 to 100, default 20) |
 | GET | `/v1/payments/{payment_id}` | viewer, operator; a client that pays or receives it | One payment and its postings |
 | GET | `/v1/payments/{payment_id}/journey` | as above | Every recorded stage of one payment |
+| GET | `/v1/demo/config` | any signed-in role | Whether this API's demo fault switch is on (D27): `{"demo_faults_enabled": true}` or `false` |
 | GET | `/demo` | anyone | The demo page (static HTML; it signs in and calls the endpoints above) |
 | GET | `/v1/dlq` | operator | Dead letters, oldest first (`limit`, `after_id`, `reason` prefix, `replayed`) |
 | POST | `/v1/dlq/{message_id}/replay` | operator | Republish one dead letter to the main topic |
@@ -44,6 +45,7 @@ Every example below was run against the local stack (`make up`) on 12 Nov 2026 (
 | 409 | `request_in_progress` | The same key is still being processed after a 3 s wait; retry with the same key |
 | 413 | `payload_too_large` | Body over 64 KB |
 | 422 | `idempotency_key_reuse` | Same key, different body |
+| 422 | `demo_faults_disabled` | `metadata.demo_fault` sent while the demo fault switch is off (D27); refused before any write |
 | 422 | `insufficient_funds`, `currency_mismatch`, `same_account_transfer`, `account_not_active` | The payment is refused |
 | 429 | `rate_limited` | Over 100 requests a minute for this token subject |
 | 500 | `internal_error` | A bug; logged at ERROR. None occurred across the chaos runs |
@@ -1021,5 +1023,200 @@ x-request-id: req_6af180231648407d
   "overall": "completed",
   "summary": "100.00 INR moved and every step is complete.",
   "checked_at": "2026-11-14T17:35:55.993668+00:00"
+}
+```
+
+## Demo faults (decision D27)
+
+Local stack only. With `DEMO_FAULTS_ENABLED` on, a payment may carry `metadata.demo_fault`: `fail_once`, `fail_twice` or `fail_permanent`. The money moves in the API transaction as usual; the main consumer then fails the follow-up step on purpose, through the normal retry tiers and DLQ. The fault is read from the payment row, so the Kafka event format is unchanged. Recorded on 14 Nov 2026 (UTC) against the local stack.
+
+#### GET /v1/demo/config
+
+Any signed-in role. Exactly one key, from the API process's own setting.
+
+```bash
+curl -si $API/v1/demo/config -H "Authorization: Bearer $ALICE"
+```
+
+```http
+HTTP/1.1 200 OK
+content-type: application/json
+x-request-id: req_dad4b5e838cd4efb
+
+{
+  "demo_faults_enabled": true
+}
+```
+
+#### With the switch off: 422 demo_faults_disabled
+
+Refused before anything is written, so the same idempotency key stays free. This response came from a second API process started for the purpose with `DEMO_FAULTS_ENABLED=false` on port 8001 (`$API_OFF`), against the same database; the stack's own API has the switch on.
+
+```bash
+curl -si -X POST $API_OFF/v1/payments \
+  -H "Authorization: Bearer $ALICE" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H 'Content-Type: application/json' \
+  -d '{"from_account_id": "acc_alice", "to_account_id": "acc_bob", "amount_minor": 2500, "currency": "INR", "metadata": {"demo_fault": "fail_once"}}'
+```
+
+```http
+HTTP/1.1 422 Unprocessable Content
+content-type: application/json
+x-request-id: req_493f17ce82574fe9
+
+{
+  "error": {
+    "code": "demo_faults_disabled",
+    "message": "Demo faults are disabled on this server",
+    "request_id": "req_493f17ce82574fe9",
+    "trace_id": "227e414639401524b161582f777b6225"
+  }
+}
+```
+
+#### With the switch on: a payment that fails once
+
+Accepted like any payment. The money has moved; only the consumer's follow-up step will fail on its first attempt.
+
+```bash
+curl -si -X POST $API/v1/payments \
+  -H "Authorization: Bearer $ALICE" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H 'Content-Type: application/json' \
+  -d '{"from_account_id": "acc_alice", "to_account_id": "acc_bob", "amount_minor": 2500, "currency": "INR", "metadata": {"demo_fault": "fail_once"}}'
+```
+
+```http
+HTTP/1.1 201 Created
+content-type: application/json
+x-request-id: req_e1ef934fd74441a7
+
+{
+  "payment_id": "pay_39e6eda09dc6469a97b10c96",
+  "status": "posted",
+  "from_account_id": "acc_alice",
+  "to_account_id": "acc_bob",
+  "amount_minor": 2500,
+  "currency": "INR",
+  "event_id": "b137ece8-386d-46b0-8395-3f201503eb1b",
+  "postings": [
+    {
+      "account_id": "acc_alice",
+      "amount": "-25.0000"
+    },
+    {
+      "account_id": "acc_bob",
+      "amount": "25.0000"
+    }
+  ],
+  "created_at": "2026-11-14T19:01:31.811291+00:00"
+}
+```
+
+#### Its journey, 10 seconds later
+
+`attempts` lists each failure the consumer forwarded (`delivery_failures`, migration 0005), with where it went and, for a retry queue, its delay. While the newest one waits in a queue and the event is not processed, `waiting` names the queue and the processed stage's `note` reads, for example, "Waiting in the 5-second retry queue"; after a forward to the DLQ it reads "Parked for staff review" until staff replay it. Here the retry succeeded 5 seconds later, so `waiting` is null and the record of the failed attempt stays.
+
+```bash
+curl -si "$API/v1/payments/$PAYMENT/journey" -H "Authorization: Bearer $ALICE"
+```
+
+```http
+HTTP/1.1 200 OK
+content-type: application/json
+x-request-id: req_8c3a54ec12be4b20
+
+{
+  "payment": {
+    "id": "pay_39e6eda09dc6469a97b10c96",
+    "status": "posted",
+    "amount": "25.0000",
+    "amount_minor": 2500,
+    "currency": "INR",
+    "reference": null,
+    "created_at": "2026-11-14T19:01:31.803751+00:00"
+  },
+  "parties": {
+    "sender": {
+      "id": "acc_alice",
+      "holder_name": "Alice Sharma",
+      "account_type": "customer"
+    },
+    "receiver": {
+      "id": "acc_bob",
+      "holder_name": "Bob Mehta",
+      "account_type": "customer"
+    }
+  },
+  "ledger_entries": [
+    {
+      "account_id": "acc_alice",
+      "holder_name": "Alice Sharma",
+      "amount": "-25.0000",
+      "direction": "money out"
+    },
+    {
+      "account_id": "acc_bob",
+      "holder_name": "Bob Mehta",
+      "amount": "25.0000",
+      "direction": "money in"
+    }
+  ],
+  "ledger_sum": "0.0000",
+  "event_id": "b137ece8-386d-46b0-8395-3f201503eb1b",
+  "stages": [
+    {
+      "key": "received",
+      "label": "Request received",
+      "done": true,
+      "at": "2026-11-14T19:01:31.803751+00:00",
+      "note": null
+    },
+    {
+      "key": "recorded",
+      "label": "Money moved in the ledger",
+      "done": true,
+      "at": "2026-11-14T19:01:31.803751+00:00",
+      "note": null
+    },
+    {
+      "key": "queued",
+      "label": "Queued for delivery",
+      "done": true,
+      "at": "2026-11-14T19:01:31.803751+00:00",
+      "note": null
+    },
+    {
+      "key": "sent",
+      "label": "Delivered to processor",
+      "done": true,
+      "at": "2026-11-14T19:01:31.821028+00:00",
+      "note": null
+    },
+    {
+      "key": "processed",
+      "label": "Processed",
+      "done": true,
+      "at": "2026-11-14T19:01:36.867934+00:00",
+      "note": null
+    }
+  ],
+  "attempts": [
+    {
+      "attempt": 1,
+      "kind": "transient",
+      "error": "transient: DemoTransientFault: event b137ece8-386d-46b0-8395-3f201503eb1b: simulated temporary failure on attempt 1 (demo_fault fail_once)",
+      "sent_to": "payments.retry.5s",
+      "failed_at": "2026-11-14T19:01:31.834709+00:00",
+      "retry_in_seconds": 5,
+      "parked": false
+    }
+  ],
+  "waiting": null,
+  "dead_letters": [],
+  "overall": "completed",
+  "summary": "25.00 INR moved and every step is complete.",
+  "checked_at": "2026-11-14T19:01:41.909631+00:00"
 }
 ```

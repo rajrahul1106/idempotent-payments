@@ -98,6 +98,14 @@
   .pay-line .parties, .pay-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .pay-meta { display: block; }
   .toggle { font-size: 13px; padding: 4px 10px; margin-top: 8px; }
+  #advanced { margin-top: 12px; }
+  fieldset { border: 0; margin: 8px 0 0; padding: 0; min-width: 0; }
+  legend { font-weight: 600; padding: 0; margin-bottom: 4px; }
+  label.choice { display: flex; gap: 8px; align-items: baseline; font-weight: normal; margin: 6px 0; }
+  label.choice input { width: auto; flex: none; }
+  .attempt { padding: 8px 10px; border-left: 3px solid var(--warn); background: var(--warn-bg); border-radius: 6px; margin: 6px 0; }
+  .attempt.parked { border-left-color: var(--bad); background: var(--bad-bg); }
+  .attempt.done { border-left-color: var(--ok); background: var(--ok-bg); }
   .scroll { max-height: 320px; overflow: auto; }
   .amount { font-variant-numeric: tabular-nums; font-weight: 600; }
   .out { color: var(--bad); }
@@ -145,6 +153,17 @@
         <div id="amount-help" class="tech">Up to two decimal places, for example 500 or 500.50</div>
         <label for="note">Note (optional)</label>
         <input id="note" maxlength="64" placeholder="Rent, dinner, anything">
+        <details id="advanced" class="hidden">
+          <summary>Advanced: simulate a problem</summary>
+          <fieldset>
+            <legend>What should go wrong after the money moves?</legend>
+            <label class="choice"><input type="radio" name="fault" value="none" checked><span>No problem</span></label>
+            <label class="choice"><input type="radio" name="fault" value="fail_once"><span>Fail once <span class="muted">(one retry after 5 seconds, then it completes)</span></span></label>
+            <label class="choice"><input type="radio" name="fault" value="fail_twice"><span>Fail twice <span class="muted">(the second retry waits 1 minute)</span></span></label>
+            <label class="choice"><input type="radio" name="fault" value="fail_permanent"><span>Fail permanently <span class="muted">(parked for staff review)</span></span></label>
+            <p class="tech">The money always moves first. Only the follow-up step fails. Local demo only.</p>
+          </fieldset>
+        </details>
         <div class="action">
           <button class="primary" type="submit" id="btn-send">Send payment</button>
           <p>Moves the money once and shows every step.</p>
@@ -209,7 +228,7 @@
             <tbody id="ledger"></tbody>
           </table>
           <p><span id="ledger-badge" class="pill"></span></p>
-          <h3>Failures <span class="tech">dead-letter queue</span></h3>
+          <h3>Retries and failures <span class="tech">retry topics, dead-letter queue</span></h3>
           <div id="failures"></div>
         </div>
       </div>
@@ -271,6 +290,9 @@
     service_unavailable: "The bank's database is unavailable. Try again shortly.",
     payload_too_large: "The request is too large.",
     payment_not_found: "That payment does not exist.",
+    demo_faults_disabled: "Simulated problems are turned off on this server.",
+    dlq_already_replayed: "This message was already sent again.",
+    dlq_message_not_found: "That problem message does not exist.",
     internal_error: "Something went wrong on the server.",
   };
   function plainError(status, body) {
@@ -319,12 +341,19 @@
   }
 
   // ---------- API ----------
+  // A request belongs to the session that made it. After sign-out nothing
+  // more is sent, and a reply that arrives later is dropped (stale), so one
+  // user's work never reaches the next user's page.
+  const STALE = { stale: true, status: 0, ok: false, body: null, headers: new Headers() };
   async function api(path, options = {}) {
+    const session = state.session;
+    if (!state.token && path !== "/v1/auth/token") return STALE;
     const headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
     if (state.token) headers.Authorization = "Bearer " + state.token;
     const resp = await fetch(path, Object.assign({}, options, { headers }));
     let body = null;
     try { body = await resp.json(); } catch (e) { body = null; }
+    if (state.session !== session) return STALE;
     if (resp.status === 401 && state.token) expire();
     return { status: resp.status, ok: resp.ok, body, headers: resp.headers };
   }
@@ -365,6 +394,7 @@
   $("signout").addEventListener("click", () => endSession(""));
   function expire() { endSession("Session expired, sign in again."); }
   function endSession(message) {
+    state.session = (state.session || 0) + 1;
     state.token = null; state.role = null; state.accountId = null; state.last = null; state.current = null;
     clearTimeout(state.expiryTimer); stopPolling();
     $("app").classList.add("hidden"); $("whoami").classList.add("hidden"); $("signin").classList.remove("hidden");
@@ -374,10 +404,19 @@
     state.accounts = []; state.showTest = false; state.traceId = null; state.eventId = null;
     for (const id of ["accounts", "recent", "recon", "dlq", "from", "to", "tracker", "ledger", "failures", "sender", "receiver"]) $(id).replaceChildren();
     $("dlq-count").textContent = ""; $("toggle-test").classList.add("hidden");
+    state.demoFaults = false; $("advanced").classList.add("hidden"); $("advanced").open = false;
+    document.querySelector('input[name="fault"][value="none"]').checked = true;
     updateJaeger();
+  }
+  async function loadDemoConfig() {
+    const resp = await api("/v1/demo/config");
+    if (resp.stale) return;
+    state.demoFaults = resp.ok && resp.body.demo_faults_enabled === true;
+    $("advanced").classList.toggle("hidden", !state.demoFaults);
   }
   const ROLE_NAMES = { client: "customer", operator: "bank staff", viewer: "auditor, read-only" };
   function startSession() {
+    state.session = (state.session || 0) + 1;
     $("signin").classList.add("hidden");
     $("whoami").classList.remove("hidden");
     $("whoami-text").textContent = "Signed in as " + state.username + " (" + (ROLE_NAMES[state.role] || state.role) + ")";
@@ -388,6 +427,7 @@
     const staff = state.role === "operator";
     $("recon-panel").classList.toggle("hidden", !staff);
     $("dlq-panel").classList.toggle("hidden", !staff);
+    if (mayPay) loadDemoConfig();
     $("btn-again").disabled = true; $("btn-different").disabled = true;
     refreshAll();
     if (staff) { runRecon(); loadDlq(); }
@@ -464,6 +504,7 @@
   }
   async function loadRecent() {
     const resp = await api("/v1/payments?limit=10");
+    if (resp.stale) return;
     const list = $("recent"); list.replaceChildren();
     if (!resp.ok) { list.append(el("li", { class: "muted" }, plainError(resp.status, resp.body))); return; }
     if (!resp.body.length) { list.append(el("li", { class: "muted" }, "No payments yet.")); return; }
@@ -497,6 +538,9 @@
     };
     const note = $("note").value.trim();
     if (note) body.reference = note;
+    // Only offered when GET /v1/demo/config says the switch is on.
+    const fault = document.querySelector('input[name="fault"]:checked');
+    if (state.demoFaults && fault && fault.value !== "none") body.metadata = { demo_fault: fault.value };
     return body;
   }
   function fail(text) { $("send-error").textContent = text; $("send-error").classList.remove("hidden"); return null; }
@@ -509,6 +553,7 @@
     return resp;
   }
   function handleResponse(resp, request) {
+    if (resp.stale) return;
     if (resp.ok) {
       state.last = request;
       $("btn-again").disabled = false; $("btn-different").disabled = false;
@@ -529,6 +574,7 @@
     if (!state.last) return;
     const changed = Object.assign({}, state.last.body, { amount_minor: state.last.body.amount_minor + 100 });
     const resp = await post(changed, state.last.key);
+    if (resp.stale) return;
     if (resp.ok) handleResponse(resp, { body: changed, key: state.last.key });
     else showRefused(plainError(resp.status, resp.body) + " The amount was changed by ₹1.00 but the request ID was not.", resp.body);
   });
@@ -536,6 +582,7 @@
     const body = readForm(); if (!body) return;
     const key = uuid();
     const responses = await Promise.all(Array.from({ length: 10 }, () => post(body, key)));
+    if (responses.some((r) => r.stale)) return;
     const created = responses.filter((r) => r.status === 201).length;
     const repeats = responses.filter((r) => r.status === 200 && r.headers.get("Idempotency-Replayed") === "true").length;
     const waiting = responses.filter((r) => r.status === 409).length;
@@ -582,12 +629,17 @@
     else if (opts.replayed) { dup.textContent = "This was a repeat of an earlier request. No money moved again."; dup.classList.remove("hidden"); }
     else dup.classList.add("hidden");
     $("poll-note").textContent = "";
+    // Poll every second. Give up after 60 s without progress, unless a
+    // recorded retry is waiting in a queue (then wait for it, up to 15 min).
     const started = Date.now();
+    let lastProgress = Date.now(), lastMark = "";
     const tick = async () => {
       if (state.current !== paymentId || !state.token) return;
       const done = await loadJourney(paymentId);
       if (done || state.current !== paymentId) return;
-      if (Date.now() - started >= 60000) { $("poll-note").textContent = "Still not processed after 60 s."; return; }
+      if (state.mark !== lastMark) { lastMark = state.mark; lastProgress = Date.now(); }
+      if (Date.now() - started >= 15 * 60000) { $("poll-note").textContent = "Stopped watching after 15 minutes."; return; }
+      if (!state.waiting && Date.now() - lastProgress >= 60000) { $("poll-note").textContent = "Still not processed after 60 s."; return; }
       state.poll = setTimeout(tick, 1000);
     };
     tick();
@@ -603,6 +655,7 @@
   };
   async function loadJourney(paymentId) {
     const resp = await api("/v1/payments/" + encodeURIComponent(paymentId) + "/journey");
+    if (resp.stale) return true;
     if (state.current !== paymentId) return true;
     if (!resp.ok) { showRefused(plainError(resp.status, resp.body), resp.body); return true; }
     const j = resp.body;
@@ -643,15 +696,60 @@
     lb.className = "pill " + (zero ? "ok" : "bad");
     lb.textContent = zero ? "✓ Balances to zero: money out equals money in" : "✕ Does not balance: sum is " + j.ledger_sum;
 
-    const failures = $("failures"); failures.replaceChildren();
-    if (!j.dead_letters.length) failures.append(el("p", { class: "muted" }, "No failures recorded."));
+    renderFailures(j);
+    state.waiting = !!j.waiting;
+    state.mark = JSON.stringify([j.overall, j.stages.map((s) => s.done), j.attempts.length, j.dead_letters.map((d) => d.replayed_at)]);
+    return j.overall === "completed" || j.overall === "failed";
+  }
+
+  function inWords(seconds) {
+    if (seconds % 60 === 0) { const m = seconds / 60; return m + (m === 1 ? " minute" : " minutes"); }
+    return seconds + (seconds === 1 ? " second" : " seconds");
+  }
+  // Every line here comes from a recorded row: delivery_failures (attempts)
+  // and dlq_messages (dead letters). Nothing is guessed.
+  function renderFailures(j) {
+    const box = $("failures"); box.replaceChildren();
+    if (!j.attempts.length && !j.dead_letters.length) {
+      box.append(el("p", { class: "muted" }, "No retries or failures recorded."));
+      return;
+    }
+    const PARKED = "The money already moved in the ledger. The follow-up step failed and is parked for staff review.";
+    for (const a of j.attempts) {
+      const problem = a.kind === "permanent" ? "permanent problem" : "temporary problem";
+      let next = "";
+      if (a.retry_in_seconds !== null) next = " Trying again in " + inWords(a.retry_in_seconds) + ".";
+      else if (a.parked) next = " " + PARKED;
+      box.append(el("div", { class: "attempt" + (a.parked ? " parked" : "") },
+        el("div", {}, "Attempt " + a.attempt + " failed at " + time(a.failed_at) + " (" + problem + ")." + next),
+        el("div", { class: "tech" }, a.error)));
+    }
+    const processed = j.stages.find((s) => s.key === "processed");
+    if (j.attempts.length && processed.done) {
+      box.append(el("div", { class: "attempt done" }, "Attempt " + (j.attempts[j.attempts.length - 1].attempt + 1) + " succeeded at " + time(processed.at) + "."));
+    }
     for (const d of j.dead_letters) {
-      failures.append(el("div", { class: "message bad" },
+      const line = el("div", { class: "message " + (d.replayed_at ? "info" : "bad") },
         el("div", {}, "Parked for staff review at " + time(d.created_at) + " after " + d.attempts + " attempt" + (d.attempts === 1 ? "" : "s") + "."),
         el("div", {}, d.replayed_at ? "Sent again by staff at " + time(d.replayed_at) + "." : "Not sent again yet."),
-        el("div", { class: "tech" }, d.reason)));
+        el("div", { class: "tech" }, "Problem message #" + d.id + ": " + d.reason));
+      if (!d.replayed_at && state.role === "operator") {
+        const status = el("span", { class: "muted", role: "status" });
+        line.append(el("div", { class: "row" },
+          el("button", { type: "button", class: "primary", onclick: (e) => replay(d.id, e.currentTarget, status) }, "Replay"),
+          status));
+      }
+      box.append(line);
     }
-    return j.overall === "completed" || j.overall === "failed";
+  }
+  async function replay(id, button, status) {
+    button.disabled = true;
+    status.textContent = "Sending it again...";
+    const resp = await api("/v1/dlq/" + encodeURIComponent(id) + "/replay", { method: "POST" });
+    if (resp.stale) return;
+    if (!resp.ok) { status.textContent = plainError(resp.status, resp.body); button.disabled = false; return; }
+    status.textContent = "Sent again. Watching it complete.";
+    if (state.current) showPayment(state.current, {});
   }
   async function renderParty(node, party) {
     node.replaceChildren();
@@ -662,6 +760,7 @@
     const mayRead = state.role === "operator" || state.role === "viewer" || party.id === state.accountId;
     if (!mayRead) { balance.textContent = "Balance: Hidden for your role"; return; }
     const resp = await api("/v1/accounts/" + encodeURIComponent(party.id));
+    if (resp.stale) return;
     balance.textContent = resp.ok ? "Balance: " + formatAmount(resp.body.balance, resp.body.currency) : "Balance: Hidden for your role";
   }
   function updateJaeger() {
@@ -683,6 +782,7 @@
   async function runRecon() {
     const list = $("recon"); list.replaceChildren(el("li", { class: "muted" }, "Checking..."));
     const resp = await api("/v1/admin/reconciliation");
+    if (resp.stale) return;
     if (resp.status === 403) { $("recon-panel").classList.add("hidden"); return; }
     list.replaceChildren();
     if (!resp.ok) { list.append(el("li", { class: "muted" }, plainError(resp.status, resp.body))); return; }
@@ -705,6 +805,7 @@
     let after = null, count = 0, newest = [], pages = 0, capped = false;
     while (true) {
       const resp = await api("/v1/dlq?replayed=false&limit=200" + (after !== null ? "&after_id=" + after : ""));
+      if (resp.stale) return;
       if (resp.status === 403) { $("dlq-panel").classList.add("hidden"); return; }
       if (!resp.ok) { $("dlq-count").textContent = plainError(resp.status, resp.body); return; }
       count += resp.body.items.length;

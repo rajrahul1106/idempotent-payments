@@ -91,13 +91,33 @@ class Settings(BaseSettings):
             return tuple(int(part) for part in v.split(",") if part.strip())
         return v
 
+    # --- demo page (decision D27) ----------------------------------------
+    # Lets a payment ask the consumer to fail on purpose, so the demo page
+    # can show retries and the DLQ. Off by default; refused outside a local
+    # environment by the same check that refuses the development JWT secret.
+    demo_faults_enabled: bool = False
+
+    @property
+    def is_local_environment(self) -> bool:
+        """local or ci: where development-only settings are allowed."""
+        return self.environment in ("local", "ci")
+
     @model_validator(mode="after")
     def _reject_dev_secret_outside_local(self) -> "Settings":
-        if self.environment not in ("local", "ci"):
+        if not self.is_local_environment:
             if self.jwt_secret.startswith("dev-only"):
                 raise ValueError(
                     "JWT_SECRET must be set to a real value outside local/ci"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_demo_faults_outside_local(self) -> "Settings":
+        if self.demo_faults_enabled and not self.is_local_environment:
+            raise ValueError(
+                "DEMO_FAULTS_ENABLED must be false outside local/ci: it makes "
+                "payments fail on purpose"
+            )
         return self
 
     @property

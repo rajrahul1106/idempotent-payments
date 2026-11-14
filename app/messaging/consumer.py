@@ -204,6 +204,16 @@ SideEffect = Callable[[PaymentPosted, int], None]
 #: before this topic's offset commit, with the message and that topic.
 AfterForward = Callable[[Any, str], None]
 
+#: The demo page's fault check (decision D27, app/messaging/demo_faults.py),
+#: with the event, its attempt (0 for a first delivery) and the message's
+#: headers. Runs where the side effect runs; installed only when
+#: DEMO_FAULTS_ENABLED is true.
+DemoFault = Callable[[PaymentPosted, int, dict[str, str]], None]
+
+#: Records one forwarded failure (migration 0005). Called after the offset
+#: commit, keyword arguments event_id, attempt, kind, error, sent_to.
+RecordFailure = Callable[..., Any]
+
 
 class PaymentEventConsumer(ConsumerLoop):
     client_id = "payments-ledger-consumer"
@@ -220,6 +230,8 @@ class PaymentEventConsumer(ConsumerLoop):
         side_effect: SideEffect | None = None,
         after_forward: AfterForward | None = None,
         db_backoff: tuple[float, float] | None = None,
+        demo_fault: DemoFault | None = None,
+        record_failure: RecordFailure | None = None,
     ) -> None:
         self.ladder = ladder or topics.DEFAULT_LADDER
         super().__init__(
@@ -235,6 +247,10 @@ class PaymentEventConsumer(ConsumerLoop):
         self._after_db_commit = after_db_commit
         self._side_effect = side_effect
         self._after_forward = after_forward
+        self._demo_fault = demo_fault
+        if record_failure is None:
+            from app.services.delivery_failures import record as record_failure
+        self._record_failure = record_failure
         self.stats = ConsumerStats()
 
     def _on_close(self) -> None:
@@ -272,11 +288,14 @@ class PaymentEventConsumer(ConsumerLoop):
             event = parse_payment_posted(message.headers(), message.value())
             span.set_attribute("account_id", event.from_account_id)
             effect = None
-            if self._side_effect is not None:
-                side_effect = self._side_effect
+            side_effect, demo_fault = self._side_effect, self._demo_fault
+            if side_effect is not None or demo_fault is not None:
 
                 def effect() -> None:
-                    side_effect(event, attempts + 1)
+                    if demo_fault is not None:
+                        demo_fault(event, attempts, headers)
+                    if side_effect is not None:
+                        side_effect(event, attempts + 1)
 
             applied = apply_payment_posted(event, self.group_id, before_effect=effect)
         except Exception as exc:
@@ -366,6 +385,18 @@ class PaymentEventConsumer(ConsumerLoop):
         if self._after_forward is not None:
             self._after_forward(message, target)
         self._commit(message)
+        # After the offset commit, so the D7 order (forward, acknowledgement,
+        # offset) is untouched. Best-effort: a failure here is logged only.
+        try:
+            self._record_failure(
+                event_id=headers.get(topics.HEADER_EVENT_ID),
+                attempt=attempts + 1,
+                kind=kind.value,
+                error=forwarded[topics.HEADER_LAST_ERROR],
+                sent_to=target,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("could not record the failure of %s", self.where(message), exc_info=True)
         metrics.EVENTS_PROCESSED.labels(
             topic=message.topic(), outcome="dead_lettered" if to_dlq else "retried"
         ).inc()
@@ -374,6 +405,17 @@ class PaymentEventConsumer(ConsumerLoop):
         else:
             self.stats.retried += 1
         return True
+
+
+def build_consumer(**kwargs: Any) -> PaymentEventConsumer:
+    """The production consumer. The demo fault check is installed only when
+    DEMO_FAULTS_ENABLED is true (D27); with it off, demo_fault is ignored."""
+    if settings.demo_faults_enabled:
+        from app.messaging import demo_faults
+
+        logger.warning("DEMO_FAULTS_ENABLED: payments may ask this consumer to fail on purpose")
+        kwargs.setdefault("demo_fault", demo_faults.check)
+    return PaymentEventConsumer(**kwargs)
 
 
 def main() -> int:
@@ -393,7 +435,7 @@ def main() -> int:
     setup_tracing("consumer")
     metrics.start_metrics_server("consumer")
     try:
-        PaymentEventConsumer().run(stop)
+        build_consumer().run(stop)
     except ProcessingError:
         logger.exception("consumer cannot continue")
         linger_before_exit(stop)

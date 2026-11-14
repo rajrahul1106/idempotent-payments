@@ -176,6 +176,31 @@ class DlqMessage(Base):
     )
 
 
+class DeliveryFailure(Base):
+    """One failed attempt the main consumer forwarded to a retry tier or the
+    DLQ (migration 0005). Written best-effort, after the offset commit, so it
+    never changes what happens to the message. event_id is NULL when the
+    message had no usable one."""
+
+    __tablename__ = "delivery_failures"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    event_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False))
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    error: Mapped[str] = mapped_column(Text, nullable=False)
+    sent_to: Mapped[str] = mapped_column(Text, nullable=False)
+    failed_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("kind IN ('transient', 'permanent')", name="ck_delivery_failures_kind"),
+        CheckConstraint("attempt > 0", name="ck_delivery_failures_attempt"),
+        Index("ix_delivery_failures_event", "event_id", "id"),
+    )
+
+
 class ReconciliationRun(Base):
     """Result of one invariant check."""
 

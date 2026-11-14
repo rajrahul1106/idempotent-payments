@@ -95,3 +95,11 @@ class AccountBusy(DomainError):
     status_code = 503
     code = "service_busy"
     headers = {"Retry-After": "1"}
+
+
+class DemoFaultsDisabled(DomainError):
+    """A payment asked for a demo fault while DEMO_FAULTS_ENABLED is off (D27).
+    Refused before anything is written."""
+
+    status_code = 422
+    code = "demo_faults_disabled"

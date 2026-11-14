@@ -135,6 +135,7 @@ Other targets:
 With the stack up, open **http://localhost:8000/demo** and sign in as `alice` (a customer), `operator` (bank staff) or `auditor` (read-only); the development passwords are in `scripts/seed.py`.
 Send money and watch the payment go through each step: request received, money moved in the ledger, queued, delivered and processed.
 Send the same request again, or ten copies at once, to see a repeat answered without charging twice.
+Under "Advanced: simulate a problem", make the follow-up step fail once, twice or permanently, and watch the retries, the dead letter and, as `operator`, the replay (local stack only: `DEMO_FAULTS_ENABLED`, decision D27).
 
 ![The demo page after Alice sends 500.00 to Bob: all five steps complete and the ledger balances to zero](docs/images/demo-payment.png)
 

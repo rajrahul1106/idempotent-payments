@@ -68,6 +68,8 @@ services:
       DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      # Demo page only (decision D27): local stack, never production.
+      DEMO_FAULTS_ENABLED: "true"
     ports:
       - "8000:8000"
     depends_on:
@@ -124,6 +126,8 @@ services:
       DATABASE_URL: postgresql+psycopg://payments:payments@postgres:5432/payments
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      # Demo page only (decision D27): local stack, never production.
+      DEMO_FAULTS_ENABLED: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -149,6 +153,8 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      # Demo page only (decision D27): local stack, never production.
+      DEMO_FAULTS_ENABLED: "true"
     depends_on:
       topics:
         condition: service_completed_successfully
@@ -166,6 +172,8 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      # Demo page only (decision D27): local stack, never production.
+      DEMO_FAULTS_ENABLED: "true"
     depends_on:
       topics:
         condition: service_completed_successfully
@@ -183,6 +191,8 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      # Demo page only (decision D27): local stack, never production.
+      DEMO_FAULTS_ENABLED: "true"
     depends_on:
       topics:
         condition: service_completed_successfully

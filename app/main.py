@@ -15,7 +15,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.body_limit import MAX_BODY_BYTES, BodySizeLimit
 from app.api.errors import register_error_handlers
-from app.api.routes import accounts, admin, auth, dlq, payments
+from app.api.routes import accounts, admin, auth, demo, dlq, payments
 from app.core import metrics
 from app.core.config import settings
 from app.core.telemetry import setup_tracing, shutdown_tracing
@@ -129,7 +129,7 @@ def demo_page() -> FileResponse:
 # Imported directly, not discovered: a router that fails to import must stop
 # the process at startup, never leave the API running with its endpoints
 # missing.
-for _router in (auth.router, accounts.router, payments.router, dlq.router, admin.router):
+for _router in (auth.router, accounts.router, payments.router, dlq.router, admin.router, demo.router):
     app.include_router(_router, prefix="/v1")
 
 
@@ -144,7 +144,7 @@ def _instrument() -> None:
     # One server span per request. Probes are not traced. Request and
     # response headers and bodies are not captured (the instrumentation's
     # default), so no bearer token or request body reaches a span.
-    FastAPIInstrumentor.instrument_app(app, excluded_urls="health,ready,metrics,demo")
+    FastAPIInstrumentor.instrument_app(app, excluded_urls="health,ready,metrics,/demo$")
 
 
 _instrument()
