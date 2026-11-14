@@ -62,6 +62,8 @@ class IdempotencyKey(Base):
             name="ck_idempotency_state",
         ),
         Index("ix_idempotency_expires", "expires_at"),
+        # Migration 0004: the journey view finds a payment's key by transaction.
+        Index("ix_idempotency_transaction_id", "transaction_id"),
     )
 
 

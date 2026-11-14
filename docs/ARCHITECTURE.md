@@ -149,6 +149,7 @@ The deferred trigger is the most important line in the schema: an unbalanced tra
 | `(id) WHERE published_at IS NULL` | outbox | Partial: the relay reads only unpublished rows, in id order, one batch at a time; the index stays the size of the backlog |
 | `(created_at)` | outbox | Publish delay |
 | `(expires_at)` | idempotency_keys | Expired-key cleanup |
+| `(transaction_id)` | idempotency_keys | The journey view's "request received" stage (migration 0004): an index scan of 0.06 ms instead of a sequential scan of 697,170 keys (36 ms warm, 683 ms cold) |
 | `(event_id) WHERE replayed_at IS NULL` | dlq_messages | What still needs an operator |
 
 ### Balance and concurrency

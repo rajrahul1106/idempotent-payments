@@ -148,6 +148,29 @@ def test_migrations_apply_roll_back_and_reapply_cleanly(scratch_database):
     assert _snapshot(scratch_database) == applied
 
 
+def test_migration_0004_adds_and_drops_the_transaction_id_index(scratch_database):
+    def indexes() -> dict[str, str]:
+        eng = create_engine(scratch_database)
+        try:
+            with eng.connect() as conn:
+                return dict(
+                    conn.execute(
+                        text("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'idempotency_keys'")
+                    ).all()
+                )
+        finally:
+            eng.dispose()
+
+    _alembic(scratch_database, "upgrade", "0004")
+    after = indexes()
+    assert "ix_idempotency_transaction_id" in after
+    assert after["ix_idempotency_transaction_id"].endswith("USING btree (transaction_id)")
+
+    _alembic(scratch_database, "downgrade", "0003")
+    assert "ix_idempotency_transaction_id" not in indexes()
+    assert "ix_idempotency_expires" in indexes()
+
+
 def test_payment_events_money_is_numeric_20_4():
     """Migration 0002: one representation of money in the database."""
     with engine.connect() as conn:
